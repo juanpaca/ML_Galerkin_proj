@@ -116,8 +116,10 @@ class KANBubble1D(nn.Module):
         return self.kan(x_in).squeeze(-1)
 
     def norm_at_mid(self, pe, rho, eps_ratios=None):
-        pe_t = torch.as_tensor(pe)
-        rho_t = torch.as_tensor(rho)
+        dev = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+        pe_t = torch.as_tensor(pe, dtype=dtype, device=dev)
+        rho_t = torch.as_tensor(rho, dtype=dtype, device=dev)
         mid = torch.full_like(pe_t, 0.5)
         x_mid = self._build_input(mid, pe_t, rho_t, eps_ratios)
         raw_mid = self._raw(x_mid)
@@ -153,12 +155,13 @@ class KANBubble1D(nn.Module):
         eps_ratios: np.ndarray | None = None,
         dtype: torch.dtype = torch.float32,
     ) -> tuple[np.ndarray, np.ndarray]:
-        xi_t = torch.tensor(np.asarray(xi, dtype=float), dtype=dtype, requires_grad=True)
+        dev = next(self.parameters()).device
+        xi_t = torch.tensor(np.asarray(xi, dtype=float), dtype=dtype, device=dev, requires_grad=True)
         pe_t = torch.full_like(xi_t, float(pe))
         rho_t = torch.full_like(xi_t, float(rho))
         eps_t = None
         if eps_ratios is not None:
-            eps_t = torch.tensor(np.asarray(eps_ratios, dtype=float), dtype=dtype)
+            eps_t = torch.tensor(np.asarray(eps_ratios, dtype=float), dtype=dtype, device=dev)
             eps_t = eps_t.expand(xi_t.shape[0], -1)
         b = self.forward(xi_t, pe_t, rho_t, eps_ratios=eps_t)
         db = torch.autograd.grad(b, xi_t, torch.ones_like(b), create_graph=False)[0]
