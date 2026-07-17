@@ -1,6 +1,15 @@
+# Python
 __pycache__/
 *.pyc
 venv/
-*.tar.gz
 .ipynb_checkpoints/
+
+# OS
 .DS_Store
+*.tar.gz
+
+# Auxiliary project files (not needed for running)
+report_project/
+theory/
+
+
