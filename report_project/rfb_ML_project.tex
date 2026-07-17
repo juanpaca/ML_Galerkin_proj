@@ -1,0 +1,529 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,top=0.3in,bottom=0.3in,left=0.3in,right=0.3in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{hyperref}
+\usepackage{microtype}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\I}{(0,1)}
+\newcommand{\Th}{\mathcal{T}_h}
+\newcommand{\V}{V}
+\newcommand{\Vh}{V_h}
+\newcommand{\Vp}{V_h^P}
+\newcommand{\Vhb}{V_h^b}
+\newcommand{\Linfty}{L^\infty (0,\ell)}
+\newcommand{\Bh}{B_h}
+\newcommand{\Pe}{\operatorname{Pe}}
+\newcommand{\calL}{\mathcal{L}}
+\newcommand{\calT}{\mathcal{T}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\supp}{\operatorname{supp}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+
+\title{Learning Residual-Free Bubbles to Solve Elliptic Problems}
+\author{Juan Felipe Pacazuca Santiago}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report describes a one-dimensional prototype for learning residual-free bubble functions in elliptic problems. The method keeps the finite element solve itself classical: a coarse piecewise linear space is enriched locally by bubbles, the bubble unknowns are eliminated element by element, and the final global system has only the usual nodal degrees of freedom. The learning task is deliberately local. A Kolmogorov--Arnold Network is trained to approximate reference residual-free bubbles obtained from two companion bubbles (one per coarse basis function) and one source bubble (from the forcing term). We also include a local maximum-principle penalty in the training loss, so that learned bubbles respect the natural bounds of the local boundary value problems used to generate the training data. The resulting method is not a black-box PDE solver; it is a learned subscale model inserted into a statically condensed Galerkin method.
+\end{abstract}
+
+\section{The 1D Model and Variational Formulation}
+
+We start with the one-dimensional reaction-advection-diffusion equation
+\begin{equation}\label{eq:strong_problem}
+    -(\varepsilon u')' + \beta u' + \sigma u = f
+    \qquad \text{in } (0,\ell),
+\end{equation}
+with homogeneous Dirichlet boundary conditions
+\begin{equation}\label{eq:dirichlet_bc}
+    u(0)=u(\ell)=0.
+\end{equation}
+Here we assume general physical coefficients \(\varepsilon, \beta, \sigma \in \Linfty\) and \(f\in L^2(0, \ell)\), and for well-posedness we consider \(\varepsilon>0\), \(2\sigma + \frac{\partial \beta}{\partial x} \geq 0\). 
+Let
+\begin{equation}
+    V := H_0^1(0, \ell).
+\end{equation}
+The weak formulation is: find \(u\in V\) such that
+\begin{equation}\label{eq:weak_problem}
+    a(u,v)=L(v)
+    \qquad \forall v\in V,
+\end{equation}
+where
+\begin{equation}\label{eq:bilinear_form}
+    a(w,v)
+    :=
+    \int_0^\ell \varepsilon w'v'\dd x
+    +
+    \int_0^\ell \beta w'v\dd x
+    +
+    \int_0^\ell \sigma wv\dd x,
+\end{equation}
+and
+\begin{equation}\label{eq:linear_form}
+    L(v):=\int_0^\ell fv\dd x.
+\end{equation}
+
+Let
+\begin{equation}
+    \Th = \left\{K_j=(x_j,x_{j+1}) : j=0,\ldots,N-1\right\}.
+\end{equation}
+be a partition of \( (0, \ell) \), with element length \(h_j=x_{j+1}-x_j\). The standard continuous piecewise linear space is
+\begin{equation}
+    V_h^P := \{v_h\in H_0^1(0, \ell): v_h|_{K}\in \mathbb{P}_1(K)\text{ for all }K\in\Th\}.
+\end{equation}
+The classical Galerkin method seeks \(u_h\in V_h^P\) satisfying
+\begin{equation}\label{eq:classical_galerkin}
+    a(u_h,v_h)=L(v_h)
+    \qquad \forall v_h\in V_h^P.
+\end{equation}
+For the advection-dominated problem, a useful local parameter is the element Peclet number
+\begin{equation}
+    \Pe_K := \frac{|\beta|h_K}{2\varepsilon}.
+\end{equation}
+When \(\Pe_K\gg 1\), the coarse Galerkin method does not contain enough subgrid information to represent the boundary layer, and the resulting discrete solution may overshoot or oscillate.
+
+\section{Residual-Free Bubbles: The Abstract Framework}
+\label{sec:RFB_theory}
+
+\subsection{Enriched space and the local bubble problem}
+
+The space \(V_h^P\) is our \emph{coarse} approximation space. We enrich it by adding, on each element \(K\in\Th\), a finite-dimensional subspace \(B^K\subset H_0^1(K)\) whose functions are extended by zero outside \(K\). Define
+\begin{equation}
+    B:=\bigoplus_{K\in\Th}B^K,\qquad
+    V_h:=V_h^P\oplus B.
+\end{equation}
+Any function \(v_h\in V_h\) splits uniquely as
+\begin{equation}
+    v_h=v_P+v_B = v_P+\sum_{K\in\Th} v_{B,K},
+    \qquad
+    v_P\in V_h^P,\quad v_{B,K}\in B^K.
+\end{equation}
+The Galerkin approximation of \eqref{eq:weak_problem} on the enriched space reads:
+find \(u_h=u_P+u_B\in V_h\) such that
+\begin{equation}\label{eq:enriched_galerkin_split}
+    a(u_h,v_P)=L(v_P)\quad\forall v_P\in V_h^P,
+    \qquad
+    a(u_h,v_{B,K})_K=L_K(v_{B,K})
+    \quad\forall v_{B,K}\in B^K,\ \forall K\in\Th,
+\end{equation}
+where the subscript \(K\) restricts the integrals to element \(K\).
+
+Since \(u_h|_K = u_P|_K+u_{B,K}\) and the coarse part \(u_P\) is fixed on element \(K\), the second equation in \eqref{eq:enriched_galerkin_split} becomes: for each \(K\),
+\begin{equation}\label{eq:bubble_residual_eq}
+    a(u_{B,K},v_{B,K})_K
+    = -\bigl(a(u_P,\cdot)_K-L_K(\cdot)\bigr)(v_{B,K})
+    \qquad\forall v_{B,K}\in B^K.
+\end{equation}
+The right-hand side is (minus) the \emph{element residual} of the coarse function \(u_P\) evaluated on the test function \(v_{B,K}\).
+
+\subsection{The affine operator \(\calT_K\) and the definition of \(B^K\)}
+
+The residual-free bubble approach defines \(B^K\) to be the largest possible space for which \eqref{eq:bubble_residual_eq} can hold, namely we require it to hold for \emph{every} test function in \(H_0^1(K)\). That is, we define the bubble correction \(u_{B,K}\) as the solution of the variational problem
+\begin{equation}\label{eq:RFB_variational}
+    \text{find } u_{B,K}\in H_0^1(K):\quad
+    a(u_{B,K},v)_K = -\bigl(a(u_P,\cdot)_K-L_K(\cdot)\bigr)(v)
+    \qquad\forall v\in H_0^1(K).
+\end{equation}
+By the Lax--Milgram theorem (the bilinear form \(a(\cdot,\cdot)_K\) is coercive on \(H_0^1(K)\) under our assumptions on \(\varepsilon,\beta,\sigma\)), problem \eqref{eq:RFB_variational} has a unique solution that depends linearly on \(u_P|_K\) and affinely on the source term \(f|_K\). This defines an affine operator
+\begin{equation}\label{eq:T_K_operator}
+    \calT_K : V_{h,K}^P \longrightarrow H_0^1(K),\qquad
+    u_P|_K \longmapsto u_{B,K},
+\end{equation}
+where \(V_{h,K}^P:=\{v_P|_K : v_P\in V_h^P\}\) is the space of restrictions of coarse functions to element \(K\).
+
+The residual-free bubble space on element \(K\) is defined as the image of this operator:
+\begin{equation}\label{eq:BK_definition}
+    B^K := \calT_K\bigl(V_{h,K}^P\bigr) \subset H_0^1(K).
+\end{equation}
+The functions in \(B^K\) are called \emph{residual-free bubbles} because the sum \(u_P|_K+u_{B,K}\) satisfies the original differential equation in the interior of \(K\):
+\begin{equation}
+    \calL(u_P+u_{B,K})=f \quad\text{in }K,\qquad
+    u_{B,K}=0 \quad\text{on }\partial K,
+\end{equation}
+in the sense of distributions, so the residual of the coarse function is exactly cancelled by the bubble correction within each element.
+
+\subsection{A basis for \(B^K\)}
+
+Let \(\{\phi_{1,K},\dots,\phi_{N,K}\}\) be a basis of \(V_{h,K}^P\), where \(N=\dim V_{h,K}^P\). For each basis function \(\phi_{i,K}\), define the \emph{companion bubble} \(b_{i,K}\in H_0^1(K)\) as the unique solution of
+\begin{equation}\label{eq:companion_bubble}
+    a(b_{i,K},v)_K = -a(\phi_{i,K},v)_K \qquad\forall v\in H_0^1(K),\quad i=1,\dots,N.
+\end{equation}
+Additionally, let \(b_K^f\in H_0^1(K)\) be the \emph{source bubble} satisfying
+\begin{equation}\label{eq:source_bubble}
+    a(b_K^f,v)_K = L_K(v) = \int_K f\,v\,\dd x \qquad\forall v\in H_0^1(K).
+\end{equation}
+Both problems are well-posed by the same coercivity argument.
+
+Since the operator \(\calT_K\) is affine, for any \(u_P|_K=\sum_{i=1}^N U_i\,\phi_{i,K}\) we have
+\begin{equation}
+    u_{B,K} = \calT_K\bigl(u_P|_K\bigr)
+    = \sum_{i=1}^N U_i\,b_{i,K} + b_K^f.
+\end{equation}
+Therefore
+\begin{equation}\label{eq:BK_basis}
+    B^K = \operatorname{span}\{b_{1,K},\dots,b_{N,K},\,b_K^f\},
+    \qquad \dim B^K \le N+1.
+\end{equation}
+
+\subsubsection*{One-dimensional case with piecewise linear coarse space}
+
+In this work \(\Omega=(0,\ell)\) and the coarse space is the continuous piecewise linear space
+\begin{equation}
+    V_h^P := \{v\in H_0^1(\Omega): v|_K\in\mathbb{P}_1(K)\ \forall K\in\Th\}.
+\end{equation}
+On any element \(K=(x_j,x_{j+1})\), the restriction space \(V_{h,K}^P=\mathbb{P}_1(K)\) has dimension \(N=2\). A convenient basis is
+\begin{equation}
+    \phi_{1,K}(x)=\frac{x_{j+1}-x}{h_K},\quad
+    \phi_{2,K}(x)=\frac{x-x_j}{h_K},
+\end{equation}
+with derivatives \(\phi_{1,K}'=-1/h_K\), \(\phi_{2,K}'=1/h_K\). By \eqref{eq:BK_basis}, the residual-free bubble space on \(K\) has dimension
+\begin{equation}
+    \dim B^K = N+1 = 3.
+\end{equation}
+The three bubbles consist of:
+\begin{itemize}
+    \item two \emph{companion bubbles} \(b_{1,K},b_{2,K}\) from \eqref{eq:companion_bubble},
+    \item one \emph{source bubble} \(b_K^f\) from \eqref{eq:source_bubble}.
+\end{itemize}
+Mapping each element to the reference interval \(\widehat K=(0,1)\) by \(\xi=(x-x_j)/h_K\) and writing \(a_K(\cdot,\cdot)\) in reference coordinates, the strong form of \eqref{eq:companion_bubble}--\eqref{eq:source_bubble} on \(\widehat K\) becomes
+\begin{align}
+    -\frac{\varepsilon}{h_K^2}\,b_{i,K}'' + \frac{\beta}{h_K}\,b_{i,K}' + \sigma\,b_{i,K}
+    &= -L\phi_{i,K},\qquad
+    b_{i,K}(0)=b_{i,K}(1)=0,\quad i=1,2,\label{eq:companion_strong}\\
+    -\frac{\varepsilon}{h_K^2}\,(b_K^f)'' + \frac{\beta}{h_K}\,(b_K^f)' + \sigma\,b_K^f
+    &= f,\qquad
+    b_K^f(0)=b_K^f(1)=0,\label{eq:source_strong}
+\end{align}
+where the differential operator is
+\begin{equation}
+    L w := -\frac{\varepsilon}{h_K^2}w''+\frac{\beta}{h_K}w'+\sigma w.
+\end{equation}
+Since the coarse basis functions are linear, their images under the differential operator are
+\begin{equation}\label{eq:Lphi_values}
+    L\phi_{1,K} = -\frac{\beta}{h_K} + \sigma\phi_{1,K},\qquad
+    L\phi_{2,K} = \frac{\beta}{h_K} + \sigma\phi_{2,K}.
+\end{equation}
+With the explicit reference-coordinate expressions \(\phi_{1,K}(\xi)=1-\xi\) and \(\phi_{2,K}(\xi)=\xi\), the right-hand sides of \eqref{eq:companion_strong} become
+\begin{align}
+    -L\phi_{1,K} &= \frac{\beta}{h_K} - \sigma(1-\xi)
+    = \Bigl(\frac{\beta}{h_K}-\sigma\Bigr) + \sigma\xi,\label{eq:rhs_b1}\\
+    -L\phi_{2,K} &= -\frac{\beta}{h_K} - \sigma\xi.\label{eq:rhs_b2}
+\end{align}
+Equations \eqref{eq:rhs_b1}--\eqref{eq:rhs_b2} together with the constant source term \(f\) in \eqref{eq:source_strong} show that the right-hand sides of the three bubble equations belong to the two-dimensional space \(\operatorname{span}\{1,\xi\}\). Nevertheless, there are \emph{three} distinct bubble functions because the coefficients of the basis functions \(1\) and \(\xi\) differ in each equation.
+
+\begin{remark}[Normalization]
+To obtain bubble basis functions with a canonical amplitude, we normalize each bubble by its value at the element midpoint \(x_K^*=(x_j+x_{j+1})/2\) (i.e., \(\xi=1/2\)):
+\begin{equation}
+    \widehat b_{K,i}(\xi) := \frac{b_{i,K}(\xi)}{b_{i,K}(1/2)},\quad
+    \widehat b_K^f(\xi) := \frac{b_K^f(\xi)}{b_K^f(1/2)}.
+\end{equation}
+Provided the denominator is nonzero, this yields
+\begin{equation}
+    \widehat b_{K,i}(0)=\widehat b_{K,i}(1)=0,\quad
+    \widehat b_{K,i}(1/2)=1,
+\end{equation}
+and similarly for \(\widehat b_K^f\). The same normalization also applies to the companion bubbles obtained from \eqref{eq:companion_bubble}. The normalization fixes the arbitrary multiplicative scale of each bubble while preserving the zero trace and positivity (when applicable).
+\end{remark}
+
+\subsection{Maximum principle}
+
+The differential operator \(L\) in \eqref{eq:companion_strong}--\eqref{eq:source_strong} satisfies the classical one-dimensional maximum principle when \(\varepsilon>0\) and \(\sigma\ge0\). Consequently:
+\begin{itemize}
+    \item If the right-hand side of a bubble equation is nonnegative on \(K\) (resp.\ nonpositive), the corresponding bubble is nonnegative (resp.\ nonpositive) on \(K\).
+    \item For \(f\ge 0\), the source bubble \(b_K^f\) is nonnegative.
+    \item For the companion bubbles, the signs of the right-hand sides \eqref{eq:rhs_b1}--\eqref{eq:rhs_b2} depend on the parameters. For example, when \(\sigma=0\), we have \(-L\phi_{1,K}=\beta/h_K\) and \(-L\phi_{2,K}=-\beta/h_K\); thus \(b_{1,K}\) is nonnegative for \(\beta>0\) while \(b_{2,K}\) is nonpositive.
+\end{itemize}
+This maximum-principle structure is exploited during the learning phase: the learned surrogates are penalized if they exceed the range of the corresponding reference bubble.
+
+\subsection{Elimination of the bubbles}
+
+Returning to the enriched Galerkin system \eqref{eq:enriched_galerkin_split}, we substitute the representation \(u_h = u_P + \sum_K u_{B,K}\) with \(u_{B,K}=\calT_K(u_P|_K)\) into the first equation and obtain a reduced problem for the coarse unknown only:
+\begin{equation}\label{eq:reduced_problem}
+    \text{find } u_P\in V_h^P:\quad
+    a\bigl(u_P + \sum_{K\in\Th}\calT_K(u_P|_K),\,v_P\bigr) = \ell(v_P)
+    \qquad\forall v_P\in V_h^P.
+\end{equation}
+Equivalently,
+\begin{equation}\label{eq:reduced_problem_expanded}
+    a(u_P,v_P) + \sum_{K\in\Th}
+    \underbrace{a\bigl(\calT_K(u_P|_K),v_P\bigr)_K}_{\text{bubble modification}}
+    = \ell(v_P) \qquad\forall v_P\in V_h^P.
+\end{equation}
+The sum over elements represents the consistent modification of the coarse bilinear form induced by the residual-free bubbles. The entire effect of the subscale phenomena is encoded in this term. In practice, this modification is realized through the element-level static condensation described in Section~\ref{sec:condensation}.
+
+\section{Static Condensation}
+\label{sec:condensation}
+
+Section~\ref{sec:RFB_theory} established that the residual-free bubble space on each element \(K\) is the image of the affine operator \(\calT_K\) and, for a \(P_1\) coarse space, has dimension three:
+\begin{equation}
+    B^K = \operatorname{span}\{b_{1,K},\,b_{2,K},\,b_K^f\},
+\end{equation}
+where \(b_{1,K},b_{2,K}\) are the companion bubbles from \eqref{eq:companion_bubble} and \(b_K^f\) is the source bubble from \eqref{eq:source_bubble}. The global bubble space is the direct sum
+\begin{equation}
+    \Bh:=\bigoplus_{K\in\Th}B^K,
+\end{equation}
+and the enriched finite element space is
+\begin{equation}\label{eq:enriched_space}
+    V_h^b:=V_h^P\oplus \Bh.
+\end{equation}
+Any enriched approximation splits uniquely as
+\begin{equation}\label{eq:enriched_decomposition}
+    u_h(x)=u_P(x)+\sum_{K\in\Th}\bigl(U_{b,1}^K b_{1,K}(x)+U_{b,2}^K b_{2,K}(x)+U_{b,f}^K b_K^f(x)\bigr),
+\end{equation}
+where \(u_P\in V_h^P\) and the bubble coefficients \(\{U_{b,1}^K,U_{b,2}^K,U_{b,f}^K\}\) are element-local.
+
+The enriched Galerkin method is: find \(u_h\in V_h^b\) such that
+\begin{equation}\label{eq:enriched_galerkin}
+    a(u_h,v_h)=\ell(v_h)
+    \qquad \forall v_h\in V_h^b.
+\end{equation}
+We now spell out the static condensation, the algebraic elimination of the bubble unknowns.
+
+Fix an element \(K\). Let
+\begin{equation}
+    \bm\phi_K=(\phi_1^K,\phi_2^K)^T,
+    \qquad
+    \bm b_K=(b_{K,1},\ldots,b_{K,m})^T.
+\end{equation}
+The local unknowns are collected in two vectors:
+\begin{equation}
+    U_L^K=\begin{bmatrix}U_1^K\\ U_2^K\end{bmatrix}\in\R^2,
+    \qquad
+    U_b^K=\begin{bmatrix}U_{b,1}^K\\ \vdots\\ U_{b,m}^K\end{bmatrix}\in\R^m.
+\end{equation}
+The element matrix is partitioned into the four blocks
+\begin{align}
+    (A_{LL}^K)_{ij} &:= a_K(\phi_j^K,\phi_i^K),
+    && i,j=1,2,
+    \label{eq:ALL_def}\\
+    (A_{Lb}^K)_{iq} &:= a_K(b_{K,q},\phi_i^K),
+    && i=1,2,\ q=1,\ldots,m,
+    \label{eq:ALb_def}\\
+    (A_{bL}^K)_{pj} &:= a_K(\phi_j^K,b_{K,p}),
+    && p=1,\ldots,m,\ j=1,2,
+    \label{eq:AbL_def}\\
+    (A_{bb}^K)_{pq} &:= a_K(b_{K,q},b_{K,p}),
+    && p,q=1,\ldots,m.
+    \label{eq:Abb_def}
+\end{align}
+The local right-hand side is similarly split as
+\begin{align}
+    (F_L^K)_i &:= \ell_K(\phi_i^K),
+    && i=1,2,\label{eq:FL_def}\\
+    (F_b^K)_p &:= \ell_K(b_{K,p}),
+    && p=1,\ldots,m.\label{eq:Fb_def}
+\end{align}
+Using the bilinear form \eqref{eq:bilinear_form}, for example,
+\begin{equation}
+    a_K(w,v)=\int_K \varepsilon w'v'\dd x
+    +\int_K \beta w'v\dd x
+    +\int_K \sigma wv\dd x.
+\end{equation}
+Thus every block above is computable by standard quadrature once the bubble values and derivatives are known.
+
+The local enriched equations are
+\begin{equation}\label{eq:local_block_system}
+    \begin{bmatrix}
+        A_{LL}^K & A_{Lb}^K\\
+        A_{bL}^K & A_{bb}^K
+    \end{bmatrix}
+    \begin{bmatrix}
+        U_L^K\\ U_b^K
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        F_L^K\\ F_b^K
+    \end{bmatrix}.
+\end{equation}
+The second block row gives
+\begin{equation}\label{eq:bubble_recovery_local}
+    A_{bL}^K U_L^K + A_{bb}^K U_b^K = F_b^K.
+\end{equation}
+Assuming \(A_{bb}^K\) is invertible, the bubble coefficients satisfy
+\begin{equation}\label{eq:bubble_coeff_vector}
+    U_b^K = (A_{bb}^K)^{-1}\left(F_b^K-A_{bL}^K U_L^K\right).
+\end{equation}
+Substituting \eqref{eq:bubble_coeff_vector} into the first block row gives
+\begin{equation}
+    A_{LL}^K U_L^K
+    +
+    A_{Lb}^K(A_{bb}^K)^{-1}\left(F_b^K-A_{bL}^K U_L^K\right)
+    =F_L^K.
+\end{equation}
+Rearranging, we obtain the condensed element system
+\begin{equation}\label{eq:condensed_local_system}
+    A_{\mathrm{cond}}^K U_L^K=F_{\mathrm{cond}}^K,
+\end{equation}
+where
+\begin{equation}\label{eq:Acond_def}
+    A_{\mathrm{cond}}^K
+    :=
+    A_{LL}^K-A_{Lb}^K(A_{bb}^K)^{-1}A_{bL}^K,
+\end{equation}
+and
+\begin{equation}\label{eq:Fcond_def}
+    F_{\mathrm{cond}}^K
+    :=
+    F_L^K-A_{Lb}^K(A_{bb}^K)^{-1}F_b^K.
+\end{equation}
+Only \(A_{\mathrm{cond}}^K\) and \(F_{\mathrm{cond}}^K\) are assembled into the global system. Therefore the global solve has the same number of degrees of freedom as the original \(P_1\) Galerkin method. After solving the global condensed system for the nodal vector, each \(U_b^K\) is recovered locally from \eqref{eq:bubble_coeff_vector}, and the final approximation is reconstructed using \eqref{eq:enriched_decomposition}.
+
+\begin{remark}[Size and sparsity of the condensed system]
+The static condensation does not enlarge the global linear system. Let \(n_h=\dim V_h^P\) be the number of free nodal degrees of freedom after imposing the Dirichlet boundary conditions, and let \(m=\dim B^K\) be the number of bubble functions per element (here \(m=3\)). If the enriched system were assembled without condensation, it would contain
+\begin{equation}
+    n_h + m\,\#\Th
+\end{equation}
+unknowns: the nodal unknowns plus \(m\) internal bubble unknowns for each element. Static condensation eliminates all bubble unknowns before global assembly. Consequently the final global matrix acts only on the vector of nodal coefficients in \(V_h^P\), and its size is exactly
+\begin{equation}
+    n_h\times n_h.
+\end{equation}
+
+The sparsity pattern is also inherited from the coarse finite element mesh. Indeed, for each element \(K=(x_j,x_{j+1})\) in one dimension, the condensed matrix \(A_{\mathrm{cond}}^K\) is a \(2\times2\) matrix coupling only the two nodal degrees of freedom attached to \(K\). The bubbles do not create couplings between different elements because every bubble belongs to \(H_0^1(K)\) and has support contained in \(\overline K\). Therefore, after assembly, two nodal basis functions can interact only if their supports share an element, exactly as in the standard \(P_1\) Galerkin method. In one dimension this gives a tridiagonal global matrix. In higher dimensions it gives the usual mesh-neighbor sparsity graph of the coarse finite element space. The entries are modified by the Schur complement term
+\begin{equation}
+    -A_{Lb}^K(A_{bb}^K)^{-1}A_{bL}^K,
+\end{equation}
+but no new long-range couplings are introduced.
+\end{remark}
+
+\section{KAN Parameterization and Local Training}
+
+The learning problem is local: approximate the three residual-free bubble functions \(b_{1,K},b_{2,K},b_K^f\) on the reference element \(\widehat K=(0,1)\). Each is a function of the reference coordinate \(\xi\) and the local nondimensional parameters
+\begin{equation}
+    \mu_K=(\Pe_K,\rho_K),
+    \qquad
+    \Pe_K=\frac{|\beta|h_K}{2\varepsilon},
+    \qquad
+    \rho_K=\frac{\sigma h_K^2}{\varepsilon}.
+\end{equation}
+We train one Kolmogorov--Arnold Network (KAN) per bubble. The constrained KAN bubble uses the architecture
+\begin{equation}\label{eq:learned_bubble}
+    \widehat b_\theta(\xi;\mu_K)
+    =
+    4\xi(1-\xi)
+    \frac{\operatorname{softplus}(N_\theta(\xi,\mu_K))+\delta}
+    {\operatorname{softplus}(N_\theta(1/2,\mu_K))+\delta},
+\end{equation}
+where \(N_\theta\) is a small KAN whose input is \((\xi,\Pe_K,\rho_K)\) and the output is a scalar value. The formula enforces the three geometric bubble requirements directly:
+\begin{equation}\label{eq:learned_bubble_properties}
+    \widehat b_\theta(0;\mu_K)=\widehat b_\theta(1;\mu_K)=0,
+    \qquad
+    \widehat b_\theta(\xi;\mu_K)>0\quad(0<\xi<1),
+    \qquad
+    \widehat b_\theta(1/2;\mu_K)=1.
+\end{equation}
+The envelope \(4\xi(1-\xi)\) gives the zero trace, the softplus factor gives positivity, and the denominator fixes the value at the barycenter. The three trained bubbles form a local bubble vector
+\begin{equation}
+    \widehat{\bm b}_\theta
+    =
+    \bigl(\widehat b_{\theta,1},\,\widehat b_{\theta,2},\,\widehat b_{\theta}^f\bigr)^T,
+\end{equation}
+corresponding respectively to the two companion bubbles and the source bubble of \eqref{eq:BK_basis}.
+
+For a sampled parameter \(\mu_m\), the reference companion bubble \(\widehat b_{m,i}^{\mathrm{rfb}}\) is obtained by solving
+\begin{equation}\label{eq:training_local_problem_i}
+    -\frac{\varepsilon_m}{h^2}\widehat b'' + \frac{\beta_m}{h}\widehat b' + \sigma_m\widehat b
+    = -L\phi_{i,K}\big|_{\xi},
+    \qquad
+    \widehat b(0)=\widehat b(1)=0,\quad i=1,2,
+\end{equation}
+and the source bubble \(\widehat b_{m}^{f,\mathrm{rfb}}\) by solving
+\begin{equation}\label{eq:training_local_problem_f}
+    -\frac{\varepsilon_m}{h^2}\widehat b'' + \frac{\beta_m}{h}\widehat b' + \sigma_m\widehat b
+    = f_m,
+    \qquad
+    \widehat b(0)=\widehat b(1)=0,
+\end{equation}
+where \(-L\phi_{1,K}=\beta/h-\sigma(1-\xi)\) and \(-L\phi_{2,K}=-\beta/h-\sigma\xi\) from \eqref{eq:rhs_b1}--\eqref{eq:rhs_b2}. In the code these local problems are solved on a fine finite-difference grid. Each solution is then normalized as in \eqref{eq:learned_bubble}. This produces the training pairs
+\begin{equation}
+    (\mu_m,\,-L\phi_{1,K}) \longmapsto \widehat b_{m,1}^{\mathrm{rfb}},\qquad
+    (\mu_m,\,-L\phi_{2,K}) \longmapsto \widehat b_{m,2}^{\mathrm{rfb}},\qquad
+    (\mu_m,\,f_m) \longmapsto \widehat b_{m}^{f,\mathrm{rfb}}.
+\end{equation}
+
+The loss for each bubble has three parts: value matching, gradient matching (important because the condensed matrix uses bubble derivatives), and a maximum-principle penalty. For the \(q\)-th bubble (\(q=1,2,f\)):
+\begin{align}\label{eq:training_loss}
+    \mathcal{J}_q(\theta)
+    :=
+    \sum_m
+    \bigg(
+    &\|\widehat b_{\theta,q}(\cdot;\mu_m)-\widehat b_{m,q}^{\mathrm{rfb}}\|_{L^2(0,1)}^2
+    \\
+    &+\eta\|\partial_\xi\widehat b_{\theta,q}(\cdot;\mu_m)-\partial_\xi\widehat b_{m,q}^{\mathrm{rfb}}\|_{L^2(0,1)}^2
+    \\
+    &+\lambda_{\mathrm{mp}}\mathcal{M}_{m,q}(\theta)
+    \bigg).
+\end{align}
+Let
+\begin{equation}
+    m_{m,q}:=\min_{\xi\in[0,1]}\widehat b_{m,q}^{\mathrm{rfb}}(\xi),
+    \qquad
+    M_{m,q}:=\max_{\xi\in[0,1]}\widehat b_{m,q}^{\mathrm{rfb}}(\xi).
+\end{equation}
+The maximum-principle penalty is
+\begin{equation}\label{eq:mp_penalty}
+    \mathcal{M}_{m,q}(\theta)
+    :=
+    \int_0^1
+    \left[\max\{0,m_{m,q}-\widehat b_{\theta,q}(\xi;\mu_m)\}\right]^2
+    +
+    \left[\max\{0,\widehat b_{\theta,q}(\xi;\mu_m)-M_{m,q}\}\right]^2
+    \dd \xi.
+\end{equation}
+This penalty enforces the local maximum-principle structure discussed in Section~\ref{sec:RFB_theory}: since each reference bubble solves an elliptic one-dimensional problem with homogeneous boundary values, its range provides natural bounds that the learned surrogate should respect.
+
+\begin{algorithm}[h]
+\caption{Offline Training of Learned RFBs (Three Bubbles)}
+\begin{algorithmic}[1]
+\STATE Choose parameter ranges for \((\varepsilon,\beta,\sigma,h,f)\).
+\FOR{each sampled parameter \(m\)}
+    \STATE Solve \eqref{eq:training_local_problem_i} for the two companion bubbles \(b_{1},b_{2}\).
+    \STATE Solve \eqref{eq:training_local_problem_f} for the source bubble \(b^{f}\).
+    \STATE Store \(\widehat b_{m,i}^{\mathrm{rfb}}\), \(\partial_\xi\widehat b_{m,i}^{\mathrm{rfb}}\), and their bounds for \(i=1,2,f\).
+\ENDFOR
+\FOR{each bubble \(q\in\{1,2,f\}\)}
+    \STATE Train \(\widehat b_{\theta,q}\) by minimizing \eqref{eq:training_loss}.
+\ENDFOR
+\STATE Return the trained multi-bubble model \(\widehat{\bm b}_\theta\).
+\end{algorithmic}
+\end{algorithm}
+
+\section{Full Algorithm Workflow}
+
+The method separates the expensive part and the PDE solve. The training is local and offline; the online solve is a standard sparse linear solve after elementwise condensation.
+
+\subsection*{Offline stage}
+\begin{enumerate}[label=\arabic*.]
+    \item Choose ranges of \(\varepsilon\), \(\beta\), \(\sigma\), \(h\), and source \(f\) that represent the regimes of interest.
+    \item For each sampled configuration, solve the two companion bubble problems \eqref{eq:training_local_problem_i} and the source bubble problem \eqref{eq:training_local_problem_f}.
+    \item Train the three KAN bubbles with the loss \eqref{eq:training_loss}. The derivative term is included because static condensation depends on gradients; the maximum-principle term enforces the bounds implied by the local elliptic problem.
+\end{enumerate}
+
+\subsection*{Online stage}
+\begin{enumerate}[label=\arabic*.]
+    \item Build the mesh and the coarse space \(V_h^P\).
+    \item For each element \(K\), compute \((\Pe_K,\rho_K)\).
+    \item Evaluate the three trained bubbles and their derivatives at quadrature points.
+    \item Assemble the blocks \(A_{LL}^K,A_{Lb}^K,A_{bL}^K,A_{bb}^K,F_L^K,F_b^K\) from \eqref{eq:ALL_def}--\eqref{eq:Fb_def} with the \(m=3\) bubble functions \(b_{1},b_{2},b^{f}\).
+    \item Form \(A_{\mathrm{cond}}^K\) and \(F_{\mathrm{cond}}^K\) using \eqref{eq:Acond_def}--\eqref{eq:Fcond_def}.
+    \item Assemble and solve the global condensed system for the nodal unknowns.
+    \item Recover the bubble coefficients with \eqref{eq:bubble_coeff_vector} and reconstruct \(u_h\) by \eqref{eq:enriched_decomposition}.
+\end{enumerate}
+
+\begin{remark}
+The current numerical experiments compare three methods: classical Galerkin, exact RFB with all three bubbles (two companion plus source), and learned KAN-RFB. The exact RFB uses high-resolution finite-difference solutions of the local problems \eqref{eq:companion_bubble}--\eqref{eq:source_bubble} and serves as a benchmark. The learned method replaces these reference bubbles by KAN surrogates trained offline. In the test \(-\varepsilon u''+u'=1\), \(u(0)=u(1)=0\), \(\varepsilon=10^{-3}\), the three-bubble construction substantially improves the coarse Galerkin solution. The exact RFB has the smallest overshoot, while the learned RFB gives a very small \(L^2\) error but still requires further tuning if the main objective is a strictly monotone, maximum-principle-preserving numerical solution.
+\end{remark}
+
+\end{document}

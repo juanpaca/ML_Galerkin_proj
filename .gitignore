@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+venv/
+*.tar.gz
+.ipynb_checkpoints/
+.DS_Store

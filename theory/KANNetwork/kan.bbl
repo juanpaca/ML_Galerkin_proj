@@ -1,0 +1,591 @@
+\begin{thebibliography}{100}
+
+\bibitem{haykin1994neural}
+Simon Haykin.
+\newblock {\em Neural networks: a comprehensive foundation}.
+\newblock Prentice Hall PTR, 1994.
+
+\bibitem{cybenko1989approximation}
+George Cybenko.
+\newblock Approximation by superpositions of a sigmoidal function.
+\newblock {\em Mathematics of control, signals and systems}, 2(4):303--314, 1989.
+
+\bibitem{hornik1989multilayer}
+Kurt Hornik, Maxwell Stinchcombe, and Halbert White.
+\newblock Multilayer feedforward networks are universal approximators.
+\newblock {\em Neural networks}, 2(5):359--366, 1989.
+
+\bibitem{vaswani2017attention}
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan~N Gomez, {\L}ukasz Kaiser, and Illia Polosukhin.
+\newblock Attention is all you need.
+\newblock {\em Advances in neural information processing systems}, 30, 2017.
+
+\bibitem{cunningham2023sparse}
+Hoagy Cunningham, Aidan Ewart, Logan Riggs, Robert Huben, and Lee Sharkey.
+\newblock Sparse autoencoders find highly interpretable features in language models.
+\newblock {\em arXiv preprint arXiv:2309.08600}, 2023.
+
+\bibitem{kolmogorov}
+A.N. Kolmogorov.
+\newblock On the representation of continuous functions of several variables as superpositions of continuous functions of a smaller number of variables.
+\newblock {\em Dokl. Akad. Nauk}, 108(2), 1956.
+
+\bibitem{kolmogorov1957representation}
+Andrei~Nikolaevich Kolmogorov.
+\newblock On the representation of continuous functions of many variables by superposition of continuous functions of one variable and addition.
+\newblock In {\em Doklady Akademii Nauk}, volume 114, pages 953--956. Russian Academy of Sciences, 1957.
+
+\bibitem{braun2009constructive}
+J{\"u}rgen Braun and Michael Griebel.
+\newblock On a constructive proof of kolmogorov’s superposition theorem.
+\newblock {\em Constructive approximation}, 30:653--675, 2009.
+
+\bibitem{sprecher2002space}
+David~A Sprecher and Sorin Draghici.
+\newblock Space-filling curves and kolmogorov superposition-based neural networks.
+\newblock {\em Neural Networks}, 15(1):57--67, 2002.
+
+\bibitem{koppen2002training}
+Mario K{\"o}ppen.
+\newblock On the training of a kolmogorov network.
+\newblock In {\em Artificial Neural Networks—ICANN 2002: International Conference Madrid, Spain, August 28--30, 2002 Proceedings 12}, pages 474--479. Springer, 2002.
+
+\bibitem{lin1993realization}
+Ji-Nan Lin and Rolf Unbehauen.
+\newblock On the realization of a kolmogorov network.
+\newblock {\em Neural Computation}, 5(1):18--20, 1993.
+
+\bibitem{lai2021kolmogorov}
+Ming-Jun Lai and Zhaiming Shen.
+\newblock The kolmogorov superposition theorem can break the curse of dimensionality when approximating high dimensional functions.
+\newblock {\em arXiv preprint arXiv:2112.09963}, 2021.
+
+\bibitem{leni2013kolmogorov}
+Pierre-Emmanuel Leni, Yohan~D Fougerolle, and Fr{\'e}d{\'e}ric Truchetet.
+\newblock The kolmogorov spline network for image processing.
+\newblock In {\em Image Processing: Concepts, Methodologies, Tools, and Applications}, pages 54--78. IGI Global, 2013.
+
+\bibitem{fakhoury2022exsplinet}
+Daniele Fakhoury, Emanuele Fakhoury, and Hendrik Speleers.
+\newblock Exsplinet: An interpretable and expressive spline-based neural network.
+\newblock {\em Neural Networks}, 152:332--346, 2022.
+
+\bibitem{montanelli2020error}
+Hadrien Montanelli and Haizhao Yang.
+\newblock Error bounds for deep relu networks using the kolmogorov--arnold superposition theorem.
+\newblock {\em Neural Networks}, 129:1--6, 2020.
+
+\bibitem{he2023optimal}
+Juncai He.
+\newblock On the optimal expressive power of relu dnns and its application in approximation with kolmogorov superposition theorem.
+\newblock {\em arXiv preprint arXiv:2308.05509}, 2023.
+
+\bibitem{he2018relu}
+Juncai He, Lin Li, Jinchao Xu, and Chunyue Zheng.
+\newblock Relu deep neural networks and linear finite elements.
+\newblock {\em arXiv preprint arXiv:1807.03973}, 2018.
+
+\bibitem{he2023deep}
+Juncai He and Jinchao Xu.
+\newblock Deep neural networks and finite elements of any order on arbitrary dimensions.
+\newblock {\em arXiv preprint arXiv:2312.14276}, 2023.
+
+\bibitem{poggio2020theoretical}
+Tomaso Poggio, Andrzej Banburski, and Qianli Liao.
+\newblock Theoretical issues in deep networks.
+\newblock {\em Proceedings of the National Academy of Sciences}, 117(48):30039--30045, 2020.
+
+\bibitem{girosi1989representation}
+Federico Girosi and Tomaso Poggio.
+\newblock Representation properties of networks: Kolmogorov's theorem is irrelevant.
+\newblock {\em Neural Computation}, 1(4):465--469, 1989.
+
+\bibitem{lin2017does}
+Henry~W Lin, Max Tegmark, and David Rolnick.
+\newblock Why does deep and cheap learning work so well?
+\newblock {\em Journal of Statistical Physics}, 168:1223--1247, 2017.
+
+\bibitem{xu2015nonlinear}
+Hongyi Xu, Funshing Sin, Yufeng Zhu, and Jernej Barbi{\v{c}}.
+\newblock Nonlinear material design using principal stretches.
+\newblock {\em ACM Transactions on Graphics (TOG)}, 34(4):1--11, 2015.
+
+\bibitem{de1978practical}
+Carl De~Boor.
+\newblock {\em A practical guide to splines}, volume~27.
+\newblock springer-verlag New York, 1978.
+
+\bibitem{sharma2020neural}
+Utkarsh Sharma and Jared Kaplan.
+\newblock A neural scaling law from the dimension of the data manifold.
+\newblock {\em arXiv preprint arXiv:2004.10802}, 2020.
+
+\bibitem{michaud2023precision}
+Eric~J Michaud, Ziming Liu, and Max Tegmark.
+\newblock Precision machine learning.
+\newblock {\em Entropy}, 25(1):175, 2023.
+
+\bibitem{horowitz2007rate}
+Joel~L Horowitz and Enno Mammen.
+\newblock Rate-optimal estimation for a general class of nonparametric regression models with unknown link functions.
+\newblock 2007.
+
+\bibitem{kohler2021rate}
+Michael Kohler and Sophie Langer.
+\newblock On the rate of convergence of fully connected deep neural network regression estimates.
+\newblock {\em The Annals of Statistics}, 49(4):2231--2249, 2021.
+
+\bibitem{schmidt2020nonparametric}
+Johannes Schmidt-Hieber.
+\newblock Nonparametric regression using deep neural networks with relu activation function.
+\newblock 2020.
+
+\bibitem{devore1989optimal}
+Ronald~A DeVore, Ralph Howard, and Charles Micchelli.
+\newblock Optimal nonlinear approximation.
+\newblock {\em Manuscripta mathematica}, 63:469--478, 1989.
+
+\bibitem{devore1993wavelet}
+Ronald~A DeVore, George Kyriazis, Dany Leviatan, and Vladimir~M Tikhomirov.
+\newblock Wavelet compression and nonlinear n-widths.
+\newblock {\em Adv. Comput. Math.}, 1(2):197--214, 1993.
+
+\bibitem{siegel2024sharp}
+Jonathan~W Siegel.
+\newblock Sharp lower bounds on the manifold widths of sobolev and besov spaces.
+\newblock {\em arXiv preprint arXiv:2402.04407}, 2024.
+
+\bibitem{yarotsky2017error}
+Dmitry Yarotsky.
+\newblock Error bounds for approximations with deep relu networks.
+\newblock {\em Neural Networks}, 94:103--114, 2017.
+
+\bibitem{bartlett2019nearly}
+Peter~L Bartlett, Nick Harvey, Christopher Liaw, and Abbas Mehrabian.
+\newblock Nearly-tight vc-dimension and pseudodimension bounds for piecewise linear neural networks.
+\newblock {\em Journal of Machine Learning Research}, 20(63):1--17, 2019.
+
+\bibitem{siegel2023optimal}
+Jonathan~W Siegel.
+\newblock Optimal approximation rates for deep relu neural networks on sobolev and besov spaces.
+\newblock {\em Journal of Machine Learning Research}, 24(357):1--52, 2023.
+
+\bibitem{wang2024multi}
+Yongji Wang and Ching-Yao Lai.
+\newblock Multi-stage neural networks: Function approximator of machine precision.
+\newblock {\em Journal of Computational Physics}, page 112865, 2024.
+
+\bibitem{udrescu2020ai}
+Silviu-Marian Udrescu and Max Tegmark.
+\newblock Ai feynman: A physics-inspired method for symbolic regression.
+\newblock {\em Science Advances}, 6(16):eaay2631, 2020.
+
+\bibitem{udrescu2020ai2}
+Silviu-Marian Udrescu, Andrew Tan, Jiahai Feng, Orisvaldo Neto, Tailin Wu, and Max Tegmark.
+\newblock Ai feynman 2.0: Pareto-optimal symbolic regression exploiting graph modularity.
+\newblock {\em Advances in Neural Information Processing Systems}, 33:4860--4871, 2020.
+
+\bibitem{raissi2019physics}
+Maziar Raissi, Paris Perdikaris, and George~E Karniadakis.
+\newblock Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations.
+\newblock {\em Journal of Computational physics}, 378:686--707, 2019.
+
+\bibitem{karniadakis2021physics}
+George~Em Karniadakis, Ioannis~G Kevrekidis, Lu~Lu, Paris Perdikaris, Sifan Wang, and Liu Yang.
+\newblock Physics-informed machine learning.
+\newblock {\em Nature Reviews Physics}, 3(6):422--440, 2021.
+
+\bibitem{kemker2018measuring}
+Ronald Kemker, Marc McClure, Angelina Abitino, Tyler Hayes, and Christopher Kanan.
+\newblock Measuring catastrophic forgetting in neural networks.
+\newblock In {\em Proceedings of the AAAI conference on artificial intelligence}, volume~32, 2018.
+
+\bibitem{kolb1998brain}
+Bryan Kolb and Ian~Q Whishaw.
+\newblock Brain plasticity and behavior.
+\newblock {\em Annual review of psychology}, 49(1):43--64, 1998.
+
+\bibitem{meunier2010modular}
+David Meunier, Renaud Lambiotte, and Edward~T Bullmore.
+\newblock Modular and hierarchically modular organization of brain networks.
+\newblock {\em Frontiers in neuroscience}, 4:7572, 2010.
+
+\bibitem{kirkpatrick2017overcoming}
+James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, Joel Veness, Guillaume Desjardins, Andrei~A Rusu, Kieran Milan, John Quan, Tiago Ramalho, Agnieszka Grabska-Barwinska, et~al.
+\newblock Overcoming catastrophic forgetting in neural networks.
+\newblock {\em Proceedings of the national academy of sciences}, 114(13):3521--3526, 2017.
+
+\bibitem{lu2024revisiting}
+Aojun Lu, Tao Feng, Hangjie Yuan, Xiaotian Song, and Yanan Sun.
+\newblock Revisiting neural networks for continual learning: An architectural perspective, 2024.
+
+\bibitem{davies2021advancing}
+Alex Davies, Petar Veli{\v{c}}kovi{\'c}, Lars Buesing, Sam Blackwell, Daniel Zheng, Nenad Toma{\v{s}}ev, Richard Tanburn, Peter Battaglia, Charles Blundell, Andr{\'a}s Juh{\'a}sz, et~al.
+\newblock Advancing mathematics by guiding human intuition with ai.
+\newblock {\em Nature}, 600(7887):70--74, 2021.
+
+\bibitem{gukov2023searching}
+Sergei Gukov, James Halverson, Ciprian Manolescu, and Fabian Ruehle.
+\newblock Searching for ribbons with machine learning, 2023.
+
+\bibitem{petersen2006riemannian}
+P.~Petersen.
+\newblock {\em Riemannian Geometry}.
+\newblock Graduate Texts in Mathematics. Springer New York, 2006.
+
+\bibitem{anderson1958absence}
+Philip~W Anderson.
+\newblock Absence of diffusion in certain random lattices.
+\newblock {\em Physical review}, 109(5):1492, 1958.
+
+\bibitem{thouless1972relation}
+David~J Thouless.
+\newblock A relation between the density of states and range of localization for one dimensional random systems.
+\newblock {\em Journal of Physics C: Solid State Physics}, 5(1):77, 1972.
+
+\bibitem{abrahams1979scaling}
+Elihu Abrahams, PW~Anderson, DC~Licciardello, and TV~Ramakrishnan.
+\newblock Scaling theory of localization: Absence of quantum diffusion in two dimensions.
+\newblock {\em Physical Review Letters}, 42(10):673, 1979.
+
+\bibitem{lagendijk2009fifty}
+Ad~Lagendijk, Bart~van Tiggelen, and Diederik~S Wiersma.
+\newblock Fifty years of anderson localization.
+\newblock {\em Physics today}, 62(8):24--29, 2009.
+
+\bibitem{segev2013anderson}
+Mordechai Segev, Yaron Silberberg, and Demetrios~N Christodoulides.
+\newblock Anderson localization of light.
+\newblock {\em Nature Photonics}, 7(3):197--204, 2013.
+
+\bibitem{vardeny2013optics}
+Z~Valy Vardeny, Ajay Nahata, and Amit Agrawal.
+\newblock Optics of photonic quasicrystals.
+\newblock {\em Nature photonics}, 7(3):177--187, 2013.
+
+\bibitem{john1987strong}
+Sajeev John.
+\newblock Strong localization of photons in certain disordered dielectric superlattices.
+\newblock {\em Physical review letters}, 58(23):2486, 1987.
+
+\bibitem{lahini2009observation}
+Yoav Lahini, Rami Pugatch, Francesca Pozzi, Marc Sorel, Roberto Morandotti, Nir Davidson, and Yaron Silberberg.
+\newblock Observation of a localization transition in quasiperiodic photonic lattices.
+\newblock {\em Physical review letters}, 103(1):013901, 2009.
+
+\bibitem{vaidya2023reentrant}
+Sachin Vaidya, Christina J{\"o}rg, Kyle Linn, Megan Goh, and Mikael~C Rechtsman.
+\newblock Reentrant delocalization transition in one-dimensional photonic quasicrystals.
+\newblock {\em Physical Review Research}, 5(3):033170, 2023.
+
+\bibitem{de2016absence}
+Wojciech De~Roeck, Francois Huveneers, Markus M{\"u}ller, and Mauro Schiulaz.
+\newblock Absence of many-body mobility edges.
+\newblock {\em Physical Review B}, 93(1):014203, 2016.
+
+\bibitem{li2015many}
+Xiaopeng Li, Sriram Ganeshan, JH~Pixley, and S~Das Sarma.
+\newblock Many-body localization and quantum nonergodicity in a model with a single-particle mobility edge.
+\newblock {\em Physical review letters}, 115(18):186601, 2015.
+
+\bibitem{ME_an2021interactions}
+Fangzhao~Alex An, Karmela Padavi{\'c}, Eric~J Meier, Suraj Hegde, Sriram Ganeshan, JH~Pixley, Smitha Vishveshwara, and Bryce Gadway.
+\newblock Interactions and mobility edges: Observing the generalized aubry-andr{\'e} model.
+\newblock {\em Physical review letters}, 126(4):040603, 2021.
+
+\bibitem{ME_biddle2010predicted}
+J~Biddle and S~Das Sarma.
+\newblock Predicted mobility edges in one-dimensional incommensurate optical lattices: An exactly solvable model of anderson localization.
+\newblock {\em Physical review letters}, 104(7):070601, 2010.
+
+\bibitem{ME_duthie2021self}
+Alexander Duthie, Sthitadhi Roy, and David~E Logan.
+\newblock Self-consistent theory of mobility edges in quasiperiodic chains.
+\newblock {\em Physical Review B}, 103(6):L060201, 2021.
+
+\bibitem{ME_ganeshan2015nearest}
+Sriram Ganeshan, JH~Pixley, and S~Das Sarma.
+\newblock Nearest neighbor tight binding models with an exact mobility edge in one dimension.
+\newblock {\em Physical review letters}, 114(14):146601, 2015.
+
+\bibitem{ME_wang2020one}
+Yucheng Wang, Xu~Xia, Long Zhang, Hepeng Yao, Shu Chen, Jiangong You, Qi~Zhou, and Xiong-Jun Liu.
+\newblock One-dimensional quasiperiodic mosaic lattice with exact mobility edges.
+\newblock {\em Physical Review Letters}, 125(19):196604, 2020.
+
+\bibitem{ME_wang2021duality}
+Yucheng Wang, Xu~Xia, Yongjian Wang, Zuohuan Zheng, and Xiong-Jun Liu.
+\newblock Duality between two generalized aubry-andr{\'e} models with exact mobility edges.
+\newblock {\em Physical Review B}, 103(17):174205, 2021.
+
+\bibitem{ME_zhou2023exact}
+Xin-Chi Zhou, Yongjian Wang, Ting-Fung~Jeffrey Poon, Qi~Zhou, and Xiong-Jun Liu.
+\newblock Exact new mobility edges between critical and localized states.
+\newblock {\em Physical Review Letters}, 131(17):176401, 2023.
+
+\bibitem{poggio2022deep}
+Tomaso Poggio.
+\newblock How deep sparse networks avoid the curse of dimensionality: Efficiently computable functions are compositionally sparse.
+\newblock {\em CBMM Memo}, 10:2022, 2022.
+
+\bibitem{schmidt2021kolmogorov}
+Johannes Schmidt-Hieber.
+\newblock The kolmogorov--arnold representation theorem revisited.
+\newblock {\em Neural networks}, 137:119--126, 2021.
+
+\bibitem{ismayilova2024kolmogorov}
+Aysu Ismayilova and Vugar~E Ismailov.
+\newblock On the kolmogorov neural networks.
+\newblock {\em Neural Networks}, page 106333, 2024.
+
+\bibitem{poluektov2023new}
+Michael Poluektov and Andrew Polar.
+\newblock A new iterative method for construction of the kolmogorov-arnold representation.
+\newblock {\em arXiv preprint arXiv:2305.08194}, 2023.
+
+\bibitem{agarwal2021neural}
+Rishabh Agarwal, Levi Melnick, Nicholas Frosst, Xuezhou Zhang, Ben Lengerich, Rich Caruana, and Geoffrey~E Hinton.
+\newblock Neural additive models: Interpretable machine learning with neural nets.
+\newblock {\em Advances in neural information processing systems}, 34:4699--4711, 2021.
+
+\bibitem{zaheer2017deep}
+Manzil Zaheer, Satwik Kottur, Siamak Ravanbakhsh, Barnabas Poczos, Russ~R Salakhutdinov, and Alexander~J Smola.
+\newblock Deep sets.
+\newblock {\em Advances in neural information processing systems}, 30, 2017.
+
+\bibitem{song2018optimizing}
+Huan Song, Jayaraman~J Thiagarajan, Prasanna Sattigeri, and Andreas Spanias.
+\newblock Optimizing kernel machines using deep learning.
+\newblock {\em IEEE transactions on neural networks and learning systems}, 29(11):5528--5540, 2018.
+
+\bibitem{kaplan2020scaling}
+Jared Kaplan, Sam McCandlish, Tom Henighan, Tom~B Brown, Benjamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei.
+\newblock Scaling laws for neural language models.
+\newblock {\em arXiv preprint arXiv:2001.08361}, 2020.
+
+\bibitem{henighan2020scaling}
+Tom Henighan, Jared Kaplan, Mor Katz, Mark Chen, Christopher Hesse, Jacob Jackson, Heewoo Jun, Tom~B Brown, Prafulla Dhariwal, Scott Gray, et~al.
+\newblock Scaling laws for autoregressive generative modeling.
+\newblock {\em arXiv preprint arXiv:2010.14701}, 2020.
+
+\bibitem{gordon2021data}
+Mitchell~A Gordon, Kevin Duh, and Jared Kaplan.
+\newblock Data and parameter scaling laws for neural machine translation.
+\newblock In {\em ACL Rolling Review - May 2021}, 2021.
+
+\bibitem{hestness2017deep}
+Joel Hestness, Sharan Narang, Newsha Ardalani, Gregory Diamos, Heewoo Jun, Hassan Kianinejad, Md~Mostofa~Ali Patwary, Yang Yang, and Yanqi Zhou.
+\newblock Deep learning scaling is predictable, empirically.
+\newblock {\em arXiv preprint arXiv:1712.00409}, 2017.
+
+\bibitem{bahri2021explaining}
+Yasaman Bahri, Ethan Dyer, Jared Kaplan, Jaehoon Lee, and Utkarsh Sharma.
+\newblock Explaining neural scaling laws.
+\newblock {\em arXiv preprint arXiv:2102.06701}, 2021.
+
+\bibitem{michaud2023the}
+Eric~J Michaud, Ziming Liu, Uzay Girit, and Max Tegmark.
+\newblock The quantization model of neural scaling.
+\newblock In {\em Thirty-seventh Conference on Neural Information Processing Systems}, 2023.
+
+\bibitem{song2024resource}
+Jinyeop Song, Ziming Liu, Max Tegmark, and Jeff Gore.
+\newblock A resource model for neural scaling law.
+\newblock {\em arXiv preprint arXiv:2402.05164}, 2024.
+
+\bibitem{olsson2022context}
+Catherine Olsson, Nelson Elhage, Neel Nanda, Nicholas Joseph, Nova DasSarma, Tom Henighan, Ben Mann, Amanda Askell, Yuntao Bai, Anna Chen, et~al.
+\newblock In-context learning and induction heads.
+\newblock {\em arXiv preprint arXiv:2209.11895}, 2022.
+
+\bibitem{meng2022locating}
+Kevin Meng, David Bau, Alex Andonian, and Yonatan Belinkov.
+\newblock Locating and editing factual associations in gpt.
+\newblock {\em Advances in Neural Information Processing Systems}, 35:17359--17372, 2022.
+
+\bibitem{wang2023interpretability}
+Kevin~Ro Wang, Alexandre Variengien, Arthur Conmy, Buck Shlegeris, and Jacob Steinhardt.
+\newblock Interpretability in the wild: a circuit for indirect object identification in {GPT}-2 small.
+\newblock In {\em The Eleventh International Conference on Learning Representations}, 2023.
+
+\bibitem{elhage2022toy}
+Nelson Elhage, Tristan Hume, Catherine Olsson, Nicholas Schiefer, Tom Henighan, Shauna Kravec, Zac Hatfield-Dodds, Robert Lasenby, Dawn Drain, Carol Chen, et~al.
+\newblock Toy models of superposition.
+\newblock {\em arXiv preprint arXiv:2209.10652}, 2022.
+
+\bibitem{nanda2023progress}
+Neel Nanda, Lawrence Chan, Tom Lieberum, Jess Smith, and Jacob Steinhardt.
+\newblock Progress measures for grokking via mechanistic interpretability.
+\newblock In {\em The Eleventh International Conference on Learning Representations}, 2023.
+
+\bibitem{zhong2023the}
+Ziqian Zhong, Ziming Liu, Max Tegmark, and Jacob Andreas.
+\newblock The clock and the pizza: Two stories in mechanistic explanation of neural networks.
+\newblock In {\em Thirty-seventh Conference on Neural Information Processing Systems}, 2023.
+
+\bibitem{liu2023seeing}
+Ziming Liu, Eric Gan, and Max Tegmark.
+\newblock Seeing is believing: Brain-inspired modular training for mechanistic interpretability.
+\newblock {\em Entropy}, 26(1):41, 2023.
+
+\bibitem{elhage2022solu}
+Nelson Elhage, Tristan Hume, Catherine Olsson, Neel Nanda, Tom Henighan, Scott Johnston, Sheer ElShowk, Nicholas Joseph, Nova DasSarma, Ben Mann, Danny Hernandez, Amanda Askell, Kamal Ndousse, Andy Jones, Dawn Drain, Anna Chen, Yuntao Bai, Deep Ganguli, Liane Lovitt, Zac Hatfield-Dodds, Jackson Kernion, Tom Conerly, Shauna Kravec, Stanislav Fort, Saurav Kadavath, Josh Jacobson, Eli Tran-Johnson, Jared Kaplan, Jack Clark, Tom Brown, Sam McCandlish, Dario Amodei, and Christopher Olah.
+\newblock Softmax linear units.
+\newblock {\em Transformer Circuits Thread}, 2022.
+\newblock https://transformer-circuits.pub/2022/solu/index.html.
+
+\bibitem{goyal2019learning}
+Mohit Goyal, Rajan Goyal, and Brejesh Lall.
+\newblock Learning activation functions: A new paradigm for understanding neural networks.
+\newblock {\em arXiv preprint arXiv:1906.09529}, 2019.
+
+\bibitem{ramachandran2017searching}
+Prajit Ramachandran, Barret Zoph, and Quoc~V Le.
+\newblock Searching for activation functions.
+\newblock {\em arXiv preprint arXiv:1710.05941}, 2017.
+
+\bibitem{zhang2022neural}
+Shijun Zhang, Zuowei Shen, and Haizhao Yang.
+\newblock Neural network architecture beyond width and depth.
+\newblock {\em Advances in Neural Information Processing Systems}, 35:5669--5681, 2022.
+
+\bibitem{bingham2022discovering}
+Garrett Bingham and Risto Miikkulainen.
+\newblock Discovering parametric activation functions.
+\newblock {\em Neural Networks}, 148:48--65, 2022.
+
+\bibitem{bohra2020learning}
+Pakshal Bohra, Joaquim Campos, Harshit Gupta, Shayan Aziznejad, and Michael Unser.
+\newblock Learning activation functions in deep (spline) neural networks.
+\newblock {\em IEEE Open Journal of Signal Processing}, 1:295--309, 2020.
+
+\bibitem{aziznejad2019deep}
+Shayan Aziznejad and Michael Unser.
+\newblock Deep spline networks with control of lipschitz regularity.
+\newblock In {\em ICASSP 2019-2019 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)}, pages 3242--3246. IEEE, 2019.
+
+\bibitem{Dubckov2011EureqaSR}
+Ren{\'a}ta Dubc{\'a}kov{\'a}.
+\newblock Eureqa: software review.
+\newblock {\em Genetic Programming and Evolvable Machines}, 12:173--178, 2011.
+
+\bibitem{gplearn}
+Gplearn.
+\newblock \url{https://github.com/trevorstephens/gplearn}.
+\newblock Accessed: 2024-04-19.
+
+\bibitem{cranmer2023interpretable}
+Miles Cranmer.
+\newblock Interpretable machine learning for science with pysr and symbolicregression. jl.
+\newblock {\em arXiv preprint arXiv:2305.01582}, 2023.
+
+\bibitem{martius2016extrapolation}
+Georg Martius and Christoph~H Lampert.
+\newblock Extrapolation and learning equations.
+\newblock {\em arXiv preprint arXiv:1610.02995}, 2016.
+
+\bibitem{dugan2020occamnet}
+Owen Dugan, Rumen Dangovski, Allan Costa, Samuel Kim, Pawan Goyal, Joseph Jacobson, and Marin Solja{\v{c}}i{\'c}.
+\newblock Occamnet: A fast neural model for symbolic regression at scale.
+\newblock {\em arXiv preprint arXiv:2007.10784}, 2020.
+
+\bibitem{mundhenk2021symbolic}
+Terrell~N. Mundhenk, Mikel Landajuela, Ruben Glatt, Claudio~P. Santiago, Daniel faissol, and Brenden~K. Petersen.
+\newblock Symbolic regression via deep reinforcement learning enhanced genetic programming seeding.
+\newblock In A.~Beygelzimer, Y.~Dauphin, P.~Liang, and J.~Wortman Vaughan, editors, {\em Advances in Neural Information Processing Systems}, 2021.
+
+\bibitem{yu2018deep}
+Bing Yu et~al.
+\newblock The deep ritz method: a deep learning-based numerical algorithm for solving variational problems.
+\newblock {\em Communications in Mathematics and Statistics}, 6(1):1--12, 2018.
+
+\bibitem{cho2024separable}
+Junwoo Cho, Seungtae Nam, Hyunmo Yang, Seok-Bae Yun, Youngjoon Hong, and Eunbyung Park.
+\newblock Separable physics-informed neural networks.
+\newblock {\em Advances in Neural Information Processing Systems}, 36, 2024.
+
+\bibitem{li2020fourier}
+Zongyi Li, Nikola Kovachki, Kamyar Azizzadenesheli, Burigede Liu, Kaushik Bhattacharya, Andrew Stuart, and Anima Anandkumar.
+\newblock Fourier neural operator for parametric partial differential equations.
+\newblock {\em arXiv preprint arXiv:2010.08895}, 2020.
+
+\bibitem{li2021physics}
+Zongyi Li, Hongkai Zheng, Nikola Kovachki, David Jin, Haoxuan Chen, Burigede Liu, Kamyar Azizzadenesheli, and Anima Anandkumar.
+\newblock Physics-informed neural operator for learning partial differential equations.
+\newblock {\em ACM/JMS Journal of Data Science}, 2021.
+
+\bibitem{kovachki2023neural}
+Nikola Kovachki, Zongyi Li, Burigede Liu, Kamyar Azizzadenesheli, Kaushik Bhattacharya, Andrew Stuart, and Anima Anandkumar.
+\newblock Neural operator: Learning maps between function spaces with applications to pdes.
+\newblock {\em Journal of Machine Learning Research}, 24(89):1--97, 2023.
+
+\bibitem{maust2022fourier}
+Haydn Maust, Zongyi Li, Yixuan Wang, Daniel Leibovici, Oscar Bruno, Thomas Hou, and Anima Anandkumar.
+\newblock Fourier continuation for exact derivative computation in physics-informed neural operators.
+\newblock {\em arXiv preprint arXiv:2211.15960}, 2022.
+
+\bibitem{lu2021learning}
+Lu~Lu, Pengzhan Jin, Guofei Pang, Zhongqiang Zhang, and George~Em Karniadakis.
+\newblock Learning nonlinear operators via deeponet based on the universal approximation theorem of operators.
+\newblock {\em Nature machine intelligence}, 3(3):218--229, 2021.
+
+\bibitem{Gukov:2020qaj}
+Sergei Gukov, James Halverson, Fabian Ruehle, and Piotr Su\l{}kowski.
+\newblock {Learning to Unknot}.
+\newblock {\em Mach. Learn. Sci. Tech.}, 2(2):025035, 2021.
+
+\bibitem{kauffman2020rectangular}
+L.~H. Kauffman, N.~E. Russkikh, and I.~A. Taimanov.
+\newblock Rectangular knot diagrams classification with deep learning, 2020.
+
+\bibitem{hughes2020neural}
+Mark~C Hughes.
+\newblock A neural network approach to predicting and computing knot invariants.
+\newblock {\em Journal of Knot Theory and Its Ramifications}, 29(03):2050005, 2020.
+
+\bibitem{Craven:2020bdz}
+Jessica Craven, Vishnu Jejjala, and Arjun Kar.
+\newblock {Disentangling a deep learned volume formula}.
+\newblock {\em JHEP}, 06:040, 2021.
+
+\bibitem{Craven:2022cxe}
+Jessica Craven, Mark Hughes, Vishnu Jejjala, and Arjun Kar.
+\newblock {Illuminating new and known relations between knot invariants}.
+\newblock 11 2022.
+
+\bibitem{Ruehle:2020jrk}
+Fabian Ruehle.
+\newblock {Data science applications to string theory}.
+\newblock {\em Phys. Rept.}, 839:1--117, 2020.
+
+\bibitem{he2023machine}
+Y.H. He.
+\newblock {\em Machine Learning in Pure Mathematics and Theoretical Physics}.
+\newblock G - Reference,Information and Interdisciplinary Subjects Series. World Scientific, 2023.
+
+\bibitem{Gukov:2024aaa}
+Sergei Gukov, James Halverson, and Fabian Ruehle.
+\newblock Rigor with machine learning from field theory to the poincar{\'e}conjecture.
+\newblock {\em Nature Reviews Physics}, 2024.
+
+\bibitem{zhang2021multiscale}
+Shumao Zhang, Pengchuan Zhang, and Thomas~Y Hou.
+\newblock Multiscale invertible generative networks for high-dimensional bayesian inference.
+\newblock In {\em International Conference on Machine Learning}, pages 12632--12641. PMLR, 2021.
+
+\bibitem{xu2017algebraic}
+Jinchao Xu and Ludmil Zikatanov.
+\newblock Algebraic multigrid methods.
+\newblock {\em Acta Numerica}, 26:591--721, 2017.
+
+\bibitem{chen2023exponentially}
+Yifan Chen, Thomas~Y Hou, and Yixuan Wang.
+\newblock Exponentially convergent multiscale finite element method.
+\newblock {\em Communications on Applied Mathematics and Computation}, pages 1--17, 2023.
+
+\bibitem{sitzmann2020implicit}
+Vincent Sitzmann, Julien Martel, Alexander Bergman, David Lindell, and Gordon Wetzstein.
+\newblock Implicit neural representations with periodic activation functions.
+\newblock {\em Advances in neural information processing systems}, 33:7462--7473, 2020.
+
+\end{thebibliography}

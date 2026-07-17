@@ -1,0 +1,206 @@
+\begin{thebibliography}{10}
+
+\bibitem{bottou2008tradeoffs}
+L.~Bottou and O.~Bousquet.
+\newblock The tradeoffs of large scale learning.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  161--168, 2008.
+
+\bibitem{brunton2016discovering}
+S.~L. Brunton, J.~L. Proctor, and J.~N. Kutz.
+\newblock Discovering governing equations from data by sparse identification of
+  nonlinear dynamical systems.
+\newblock {\em Proceedings of the National Academy of Sciences},
+  113(15):3932--3937, 2016.
+
+\bibitem{chen1993approximations}
+T.~Chen and H.~Chen.
+\newblock Approximations of continuous functionals by neural networks with
+  application to dynamic systems.
+\newblock {\em IEEE Transactions on Neural Networks}, 4(6):910--918, 1993.
+
+\bibitem{chen1995approximation}
+T.~Chen and H.~Chen.
+\newblock Approximation capability to functions of several variables, nonlinear
+  functionals, and operators by radial basis function neural networks.
+\newblock {\em IEEE Transactions on Neural Networks}, 6(4):904--910, 1995.
+
+\bibitem{chen1995universal}
+T.~Chen and H.~Chen.
+\newblock Universal approximation to nonlinear operators by neural networks
+  with arbitrary activation functions and its application to dynamical systems.
+\newblock {\em IEEE Transactions on Neural Networks}, 6(4):911--917, 1995.
+
+\bibitem{chen2018neural}
+T.~Q. Chen, Y.~Rubanova, J.~Bettencourt, and D.~K. Duvenaud.
+\newblock Neural ordinary differential equations.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  6571--6583, 2018.
+
+\bibitem{cybenko1989approximation}
+G.~Cybenko.
+\newblock Approximation by superpositions of a sigmoidal function.
+\newblock {\em Mathematics of Control, Signals and Systems}, 2(4):303--314,
+  1989.
+
+\bibitem{dumoulin2018feature-wise}
+V.~Dumoulin, E.~Perez, N.~Schucher, F.~Strub, H.~d. Vries, A.~Courville, and
+  Y.~Bengio.
+\newblock Feature-wise transformations.
+\newblock {\em Distill}, 2018.
+\newblock https://distill.pub/2018/feature-wise-transformations.
+
+\bibitem{erichson2019physics}
+N.~B. Erichson, M.~Muehlebach, and M.~W. Mahoney.
+\newblock Physics-informed autoencoders for {Lyapunov}-stable fluid flow
+  prediction.
+\newblock {\em arXiv preprint arXiv:1905.10866}, 2019.
+
+\bibitem{hanin2017universal}
+B.~Hanin.
+\newblock Universal function approximation by deep neural nets with bounded
+  width and {ReLU} activations.
+\newblock {\em arXiv preprint arXiv:1708.02691}, 2017.
+
+\bibitem{hornik1989multilayer}
+K.~Hornik, M.~Stinchcombe, and H.~White.
+\newblock Multilayer feedforward networks are universal approximators.
+\newblock {\em Neural Networks}, 2(5):359--366, 1989.
+
+\bibitem{jia2019neural}
+J.~Jia and A.~R. Benson.
+\newblock Neural jump stochastic differential equations.
+\newblock {\em arXiv preprint arXiv:1905.10403}, 2019.
+
+\bibitem{jin2019quantifying}
+P.~Jin, L.~Lu, Y.~Tang, and G.~E. Karniadakis.
+\newblock Quantifying the generalization error in deep learning in terms of
+  data distribution and neural network smoothness.
+\newblock {\em arXiv preprint arXiv:1905.11427}, 2019.
+
+\bibitem{krizhevsky2012imagenet}
+A.~Krizhevsky, I.~Sutskever, and G.~E. Hinton.
+\newblock Imagenet classification with deep convolutional neural networks.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  1097--1105, 2012.
+
+\bibitem{lu2019deepxde}
+L.~Lu, X.~Meng, Z.~Mao, and G.~E. Karniadakis.
+\newblock {DeepXDE}: A deep learning library for solving differential
+  equations.
+\newblock {\em arXiv preprint arXiv:1907.04502}, 2019.
+
+\bibitem{lu2019dying}
+L.~Lu, Y.~Shin, Y.~Su, and G.~E. Karniadakis.
+\newblock Dying {ReLU} and initialization: Theory and numerical examples.
+\newblock {\em arXiv preprint arXiv:1903.06733}, 2019.
+
+\bibitem{lu2018collapse}
+L.~Lu, Y.~Su, and G.~E. Karniadakis.
+\newblock Collapse of deep and narrow neural nets.
+\newblock {\em arXiv preprint arXiv:1808.04947}, 2018.
+
+\bibitem{mhaskar1997neural}
+H.~N. Mhaskar and N.~Hahm.
+\newblock Neural networks for functional approximation and system
+  identification.
+\newblock {\em Neural Computation}, 9(1):143--159, 1997.
+
+\bibitem{mitzenmacher2017probability}
+M.~Mitzenmacher and E.~Upfal.
+\newblock {\em Probability and computing: randomization and probabilistic
+  techniques in algorithms and data analysis}.
+\newblock Cambridge university press, 2017.
+
+\bibitem{neofotistos2018machine}
+G.~Neofotistos, M.~Mattheakis, G.~D. Barmparis, J.~Hizanidis, G.~P. Tsironis,
+  and E.~Kaxiras.
+\newblock Machine learning with observers predicts complex spatiotemporal
+  behavior.
+\newblock {\em arXiv preprint arXiv:1807.10758}, 2018.
+
+\bibitem{pang2019fpinns}
+G.~Pang, L.~Lu, and G.~E. Karniadakis.
+\newblock {fPINNs}: Fractional physics-informed neural networks.
+\newblock {\em SIAM Journal on Scientific Computing}, 41(4):A2603--A2626, 2019.
+
+\bibitem{patra1999identification}
+J.~C. Patra, R.~N. Pal, B.~Chatterji, and G.~Panda.
+\newblock Identification of nonlinear dynamic systems using functional link
+  artificial neural networks.
+\newblock {\em IEEE transactions on systems, man, and cybernetics, part b
+  (cybernetics)}, 29(2):254--262, 1999.
+
+\bibitem{qin2019data}
+T.~Qin, K.~Wu, and D.~Xiu.
+\newblock Data driven governing equations approximation using deep neural
+  networks.
+\newblock {\em Journal of Computational Physics}, 2019.
+
+\bibitem{raissi2018multistep}
+M.~Raissi, P.~Perdikaris, and G.~E. Karniadakis.
+\newblock Multistep neural networks for data-driven discovery of nonlinear
+  dynamical systems.
+\newblock {\em arXiv preprint arXiv:1801.01236}, 2018.
+
+\bibitem{rossi2005functional}
+F.~Rossi and B.~Conan-Guez.
+\newblock Functional multi-layer perceptron: A non-linear tool for functional
+  data analysis.
+\newblock {\em Neural Networks}, 18(1):45--60, 2005.
+
+\bibitem{rudy2017data}
+S.~H. Rudy, S.~L. Brunton, J.~L. Proctor, and J.~N. Kutz.
+\newblock Data-driven discovery of partial differential equations.
+\newblock {\em Science Advances}, 3(4):e1602614, 2017.
+
+\bibitem{sabour2017dynamic}
+S.~Sabour, N.~Frosst, and G.~E. Hinton.
+\newblock Dynamic routing between capsules.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  3856--3866, 2017.
+
+\bibitem{trask2019gmls}
+N.~Trask, R.~G. Patel, B.~J. Gross, and P.~J. Atzberger.
+\newblock {GMLS-Nets}: A framework for learning from unstructured data.
+\newblock {\em arXiv preprint arXiv:1909.05371}, 2019.
+
+\bibitem{vaswani2017attention}
+A.~Vaswani, N.~Shazeer, N.~Parmar, J.~Uszkoreit, L.~Jones, A.~N. Gomez,
+  {\L}.~Kaiser, and I.~Polosukhin.
+\newblock Attention is all you need.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  5998--6008, 2017.
+
+\bibitem{winovich2019convpde}
+N.~Winovich, K.~Ramani, and G.~Lin.
+\newblock {ConvPDE-UQ}: Convolutional neural networks with quantified
+  uncertainty for heterogeneous elliptic partial differential equations on
+  varied domains.
+\newblock {\em Journal of Computational Physics}, 2019.
+
+\bibitem{zhang2019quantifying}
+D.~Zhang, L.~Lu, L.~Guo, and G.~E. Karniadakis.
+\newblock Quantifying total uncertainty in physics-informed neural networks for
+  solving forward and inverse stochastic problems.
+\newblock {\em Journal of Computational Physics}, 397:108850, 2019.
+
+\bibitem{zhang2017numerical}
+Z.~Zhang and G.~E. Karniadakis.
+\newblock {\em Numerical methods for stochastic partial differential equations
+  with white noise}.
+\newblock Springer, 2017.
+
+\bibitem{zhao2009nonlinear}
+H.~Zhao and J.~Zhang.
+\newblock Nonlinear dynamic system identification using pipelined functional
+  link artificial recurrent neural network.
+\newblock {\em Neurocomputing}, 72(13-15):3046--3054, 2009.
+
+\bibitem{zhu2019physics}
+Y.~Zhu, N.~Zabaras, P.-S. Koutsourelakis, and P.~Perdikaris.
+\newblock Physics-constrained deep learning for high-dimensional surrogate
+  modeling and uncertainty quantification without labeled data.
+\newblock {\em Journal of Computational Physics}, 394:56--81, 2019.
+
+\end{thebibliography}
