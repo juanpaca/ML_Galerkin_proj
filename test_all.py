@@ -33,7 +33,7 @@ print("\n" + "=" * 60)
 print("1. KAN1D (src/kan.py)")
 print("=" * 60)
 
-from src.kan import KAN1D, _eval_bspline_internal, _extend_knots
+from src.kan import KAN1D, _eval_bspline_basis as _eval_bspline_internal, _extend_knots
 
 # --- 1.1 Initialization ---
 k = KAN1D(n_grid=8, k=3, x_min=-1.0, x_max=1.0)

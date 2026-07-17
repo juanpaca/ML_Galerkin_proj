@@ -14,48 +14,49 @@ def _extend_knots(x_min: float, x_max: float, G: int, k: int) -> torch.Tensor:
     return torch.cat([left, interior, right])
 
 
-def _eval_bspline_internal(x: torch.Tensor, knots: torch.Tensor, k: int) -> torch.Tensor:
-    """Vectorised B-spline evaluation (Algorithm A2.1, Piegl & Tiller).
+def _eval_bspline_basis(x: torch.Tensor, knots: torch.Tensor, k: int) -> torch.Tensor:
+    """GPU-friendly B-spline basis evaluation.
 
-    Returns (B, nb) basis values (only k non-zeros per row).
-    No gradient tracking through x (knots and arithmetic only).
+    Returns (B, nb) basis matrix — only k non-zero entries per row.
+    Uses x.contiguous() + torch.where for GPU efficiency.
+    Only knot lookup is no_grad; the Cox-de Boor recurrence retains
+    gradient tracking through x for d(basis)/dx.
     """
     B = x.shape[0]
     n_knots = knots.shape[0]
     nb = n_knots - k
     device = x.device
+    x_c = x.contiguous()
 
     with torch.no_grad():
-        s = torch.searchsorted(knots, x, right=True) - 1
-        s = s.clamp(k - 1, n_knots - k - 1).long()
+        s = torch.searchsorted(knots, x_c, right=True) - 1
+        s = s.clamp(0, nb - 1).long()
 
-    N = torch.zeros(B, k, device=device)
-    N[:, 0] = 1.0
+    Nk = [torch.ones(B, device=device)]
 
     for j in range(1, k):
         rng = torch.arange(j, device=device, dtype=s.dtype)
         idx_l = (s[:, None] - rng[None, :]).clamp(0, n_knots - 1)
         idx_r = (s[:, None] + 1 + rng[None, :]).clamp(0, n_knots - 1)
-        left = x[:, None] - knots[idx_l]
-        right = knots[idx_r] - x[:, None]
+        left = x_c[:, None] - knots[idx_l]
+        right = knots[idx_r] - x_c[:, None]
         saved = torch.zeros(B, device=device)
+        new_Nk = []
         for r in range(j):
             denom = right[:, r] + left[:, j - 1 - r]
-            mask = denom.abs() > 1e-15
-            temp = torch.zeros_like(N[:, r])
-            temp[mask] = N[:, r][mask] / denom[mask]
+            inv = torch.where(denom.abs() > 1e-15, 1.0 / denom, torch.zeros_like(denom))
+            temp = Nk[r] * inv
             N_jr = saved + right[:, r] * temp
             saved = left[:, j - 1 - r] * temp
-            N[:, r] = N_jr
-        N[:, j] = saved
+            new_Nk.append(N_jr)
+        new_Nk.append(saved)
+        Nk = new_Nk
 
     basis = torch.zeros(B, nb, device=device)
     offsets = s[:, None] - (k - 1) + torch.arange(k, device=device, dtype=s.dtype)[None, :]
     for r in range(k):
-        gi = offsets[:, r]
-        with torch.no_grad():
-            mask = (gi >= 0) & (gi < nb)
-        basis[mask, gi[mask].long()] = N[:, r][mask]
+        gi = offsets[:, r].clamp(0, nb - 1).long()
+        basis[torch.arange(B, device=device), gi] = Nk[r]
     return basis
 
 
@@ -63,6 +64,7 @@ class KAN1D(nn.Module):
     """Learnable 1D function: phi(x) = w_b * SiLU(x) + w_s * Σ c_i B_i^k(x)
 
     Gradients track through all parameters (w_b, w_s, c).
+    Accepts optional precomputed_basis to skip B-spline evaluation.
     """
 
     def __init__(
@@ -84,13 +86,16 @@ class KAN1D(nn.Module):
         nn.init.xavier_uniform_(self.w_b)
         self.w_b = nn.Parameter(self.w_b.flatten())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, precomputed_basis: torch.Tensor | None = None) -> torch.Tensor:
         if x.dim() == 2 and x.shape[1] == 1:
             x = x[:, 0]
         x = x.flatten()
         base = self.w_b * silu(x)
-        basis = _eval_bspline_internal(x, self.knots, self.k)
-        spline = basis @ self.c
+        if precomputed_basis is not None:
+            spline = precomputed_basis @ self.c
+        else:
+            basis = _eval_bspline_basis(x, self.knots, self.k)
+            spline = basis @ self.c
         return base + self.w_s * spline
 
     def forward_with_deriv(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

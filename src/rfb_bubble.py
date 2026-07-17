@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.kan import KAN1D
+from src.kan import _extend_knots
 
 
 class KANLayer(nn.Module):
@@ -11,8 +11,11 @@ class KANLayer(nn.Module):
 
     Forward: out_j = Σ_{i=1}^{n_in} φ_{j,i}(in_i)
 
-    Each φ_{j,i} is a KAN1D: w_b·SiLU(x) + w_s·Σc_k·B_k(x).
-    Nodes simply sum — no activation.
+    Each φ_{j,i}(x) = w_b·SiLU(x) + w_s·Σc_k·B_k(x).
+
+    GPU-efficient: B-spline bases for ALL input columns are computed
+    in one 3D tensor operation (B, n_in, n_basis), weighted with a
+    single F.linear call.  No Python loops over edge functions.
     """
 
     def __init__(
@@ -27,20 +30,44 @@ class KANLayer(nn.Module):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
-        self.edges = nn.ModuleList([
-            KAN1D(n_grid=n_grid, k=k, x_min=x_min, x_max=x_max)
-            for _ in range(n_in * n_out)
-        ])
+        self.k = k
+        self.n_basis = n_grid + k - 1
+
+        self.register_buffer("knots", _extend_knots(x_min, x_max, n_grid, k))
+
+        self.base_weight = nn.Parameter(torch.empty(n_out, n_in))
+        nn.init.xavier_uniform_(self.base_weight)
+
+        self.spline_weight = nn.Parameter(torch.randn(n_out, n_in, self.n_basis) * 0.1)
+        self.spline_scaler = nn.Parameter(torch.ones(n_out, n_in))
+
+    def b_splines(self, x: torch.Tensor) -> torch.Tensor:
+        B, C = x.shape
+        x_3d = x.unsqueeze(-1)
+        k_row = self.knots.view(1, 1, -1)
+
+        bases = ((x_3d >= k_row[..., :-1]) & (x_3d < k_row[..., 1:])).to(x.dtype)
+
+        for deg in range(1, self.k):
+            left_den = k_row[..., deg:-1] - k_row[..., :-(deg+1)] + 1e-12
+            right_den = k_row[..., deg+1:] - k_row[..., 1:(-deg)] + 1e-12
+            left = (x_3d - k_row[..., :-(deg+1)]) / left_den * bases[..., :-1]
+            right = (k_row[..., deg+1:] - x_3d) / right_den * bases[..., 1:]
+            bases = left + right
+
+        return bases
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch = x.shape[0]
-        out = torch.zeros(batch, self.n_out, device=x.device, dtype=x.dtype)
-        idx = 0
-        for j in range(self.n_out):
-            for i in range(self.n_in):
-                out[:, j] = out[:, j] + self.edges[idx](x[:, i])
-                idx += 1
-        return out
+        x = x.contiguous()
+
+        base = F.linear(F.silu(x), self.base_weight)
+
+        bases = self.b_splines(x)
+        w_scaled = (self.spline_weight * self.spline_scaler.unsqueeze(-1)).reshape(self.n_out, -1)
+        spline = F.linear(bases.reshape(batch, -1), w_scaled)
+
+        return base + spline
 
 
 def _scale_pe_rho(pe: torch.Tensor, rho: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

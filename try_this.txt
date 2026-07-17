@@ -1,0 +1,55 @@
+# ── Single-forward benchmark ──
+# KANLayer now uses efficient-kan 3D tensor B-spline — no Python loops.
+# Expected on GPU: < 1 ms per single forward, < 5 ms per batch forward.
+
+import time, torch
+model = multi_model.bubbles[0]
+xi = torch.linspace(0, 1, 100, device=device)
+pe = torch.full_like(xi, 10.0)
+rho = torch.full_like(xi, 0.0)
+
+# warmup
+for _ in range(5): model(xi, pe, rho)
+if device.type == "cuda": torch.cuda.synchronize()
+
+# timed
+t0 = time.time()
+for _ in range(50): model(xi, pe, rho)
+if device.type == "cuda": torch.cuda.synchronize()
+t1 = time.time()
+print(f"Single forward (100 pts): {(t1-t0)/50*1000:.1f} ms  |  {(t1-t0)/50:.4f} s")
+
+
+# ── Full batch benchmark (256 samples, 100 pts each) ──
+BS = 256; Q = 100
+xi_b = torch.linspace(0, 1, Q, device=device).unsqueeze(0).expand(BS, -1).reshape(-1)
+pe_b = torch.full((BS*Q,), 10.0, device=device)
+rho_b = torch.full((BS*Q,), 0.0, device=device)
+
+# warmup
+for _ in range(3): model(xi_b, pe_b, rho_b)
+if device.type == "cuda": torch.cuda.synchronize()
+
+t0 = time.time()
+for _ in range(20): model(xi_b, pe_b, rho_b)
+if device.type == "cuda": torch.cuda.synchronize()
+t1 = time.time()
+fwd_time = (t1-t0)/20
+print(f"Batch forward (256×100 pts): {fwd_time*1000:.1f} ms  |  {fwd_time:.4f} s")
+
+# fwd+bwd
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+t0 = time.time()
+for _ in range(10):
+    opt.zero_grad()
+    out = model(xi_b, pe_b, rho_b)
+    loss = out.mean()
+    loss.backward()
+    opt.step()
+    if device.type == "cuda": torch.cuda.synchronize()
+t1 = time.time()
+step_time = (t1-t0)/10
+print(f"Batch step (fwd+bwd+opt, 256×100): {step_time*1000:.1f} ms  |  {step_time:.4f} s")
+print(f"Estimated for 700 epochs × 4 batches/epoch: {700*4*step_time/60:.0f} min")
+# Expected on GPU: step < 20 ms → ~1 min total
+
