@@ -115,12 +115,27 @@ class KANBubble1D(nn.Module):
     def _raw(self, x_in: torch.Tensor) -> torch.Tensor:
         return self.kan(x_in).squeeze(-1)
 
-    def forward(self, xi, pe, rho, eps_ratios=None):
+    def norm_at_mid(self, pe, rho, eps_ratios=None):
+        pe_t = torch.as_tensor(pe)
+        rho_t = torch.as_tensor(rho)
+        mid = torch.full_like(pe_t, 0.5)
+        x_mid = self._build_input(mid, pe_t, rho_t, eps_ratios)
+        raw_mid = self._raw(x_mid)
+        return F.softplus(raw_mid) + self.delta
+
+    def forward(self, xi, pe, rho, eps_ratios=None, norm_factor=None):
         xi = xi.flatten()
         x_in = self._build_input(xi, pe, rho, eps_ratios)
         raw = self._raw(x_in)
-
         positive = F.softplus(raw) + self.delta
+
+        if norm_factor is not None:
+            bs = norm_factor.shape[0]
+            q = xi.shape[0] // bs
+            pos = positive.view(bs, q)
+            nf = norm_factor.unsqueeze(-1)
+            env = (4.0 * xi * (1.0 - xi)).view(bs, q)
+            return (env * pos / nf).reshape(-1)
 
         mid = torch.full_like(xi, 0.5)
         x_mid = self._build_input(mid, pe, rho, eps_ratios)
@@ -161,7 +176,15 @@ class MultiKANBubble1D(nn.Module):
             [KANBubble1D(n_eps=n_eps, **bubble_kwargs) for _ in range(n_bubbles)]
         )
 
-    def forward(self, xi, pe, rho, eps_ratios=None):
+    def norm_at_mid(self, pe, rho, eps_ratios=None):
+        return torch.stack([b.norm_at_mid(pe, rho, eps_ratios=eps_ratios) for b in self.bubbles], dim=0)
+
+    def forward(self, xi, pe, rho, eps_ratios=None, norm_factor=None):
+        if norm_factor is not None:
+            return torch.stack([
+                b(xi, pe, rho, eps_ratios=eps_ratios, norm_factor=nf)
+                for b, nf in zip(self.bubbles, norm_factor)
+            ], dim=0)
         return torch.stack([bubble(xi, pe, rho, eps_ratios=eps_ratios) for bubble in self.bubbles], dim=0)
 
     def value_grad_numpy(

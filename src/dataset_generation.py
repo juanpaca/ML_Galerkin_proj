@@ -1182,27 +1182,34 @@ def train_bubble_on_dataset(
             optimizer.zero_grad()
 
             Q = n_quad
+            pe_b = pe_all[idx]           # (B,)
+            rho_b = rho_all[idx]         # (B,)
             xi_flat = xi_base.unsqueeze(0).expand(bs, -1).reshape(-1).requires_grad_(True)   # (B*Q,)
-            pe_flat = pe_all[idx].unsqueeze(1).expand(bs, Q).reshape(-1)                     # (B*Q,)
-            rho_flat = rho_all[idx].unsqueeze(1).expand(bs, Q).reshape(-1)                   # (B*Q,)
+            pe_flat = pe_b.unsqueeze(1).expand(bs, Q).reshape(-1)                           # (B*Q,)
+            rho_flat = rho_b.unsqueeze(1).expand(bs, Q).reshape(-1)                         # (B*Q,)
             eps_flat = (
                 eps_ratios_all[idx].unsqueeze(1).expand(bs, Q, -1).reshape(bs * Q, -1)
                 if eps_ratios_all is not None else None
             )
+            eps_per = eps_ratios_all[idx] if eps_ratios_all is not None else None
 
-            pred_flat = model(xi_flat, pe_flat, rho_flat, eps_ratios=eps_flat)  # (B*Q,)
+            nf = model.norm_at_mid(pe_b, rho_b, eps_ratios=eps_per)  # (B,) or (n_bubbles, B)
+            pred_flat = model(xi_flat, pe_flat, rho_flat, eps_ratios=eps_flat,
+                              norm_factor=nf)  # (B*Q,)
             pred = pred_flat.reshape(bs, Q)
 
-            dpred_flat = torch.autograd.grad(
-                pred_flat, xi_flat, torch.ones_like(pred_flat), create_graph=True
-            )[0]
-            dpred = dpred_flat.reshape(bs, Q)
+            if grad_weight > 0.0:
+                dpred_flat = torch.autograd.grad(
+                    pred_flat, xi_flat, torch.ones_like(pred_flat), create_graph=True
+                )[0]
+                dpred = dpred_flat.reshape(bs, Q)
 
             b_t = b_target_all[idx]
             db_t = db_target_all[idx]
 
             loss = torch.mean((pred - b_t) ** 2)
-            loss = loss + grad_weight * torch.mean((dpred - db_t) ** 2)
+            if grad_weight > 0.0:
+                loss = loss + grad_weight * torch.mean((dpred - db_t) ** 2)
             loss.backward()
             optimizer.step()
 
