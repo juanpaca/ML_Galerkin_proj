@@ -117,16 +117,22 @@ class KANBubble1D(nn.Module):
 
     def norm_at_mid(self, pe, rho, eps_ratios=None):
         dev = next(self.parameters()).device
-        dtype = next(self.parameters()).dtype
-        pe_t = torch.as_tensor(pe, dtype=dtype, device=dev)
-        rho_t = torch.as_tensor(rho, dtype=dtype, device=dev)
+        pe_t = torch.as_tensor(pe, device=dev)
+        rho_t = torch.as_tensor(rho, device=dev)
+        if eps_ratios is not None:
+            eps_ratios = torch.as_tensor(eps_ratios, device=dev)
         mid = torch.full_like(pe_t, 0.5)
         x_mid = self._build_input(mid, pe_t, rho_t, eps_ratios)
         raw_mid = self._raw(x_mid)
         return F.softplus(raw_mid) + self.delta
 
     def forward(self, xi, pe, rho, eps_ratios=None, norm_factor=None):
-        xi = xi.flatten()
+        dev = next(self.parameters()).device
+        xi = torch.as_tensor(xi, device=dev).flatten()
+        pe = torch.as_tensor(pe, device=dev)
+        rho = torch.as_tensor(rho, device=dev)
+        if eps_ratios is not None:
+            eps_ratios = torch.as_tensor(eps_ratios, device=dev)
         x_in = self._build_input(xi, pe, rho, eps_ratios)
         raw = self._raw(x_in)
         positive = F.softplus(raw) + self.delta

@@ -1255,6 +1255,8 @@ def train_multi_bubble_on_dataset(
     -------
     dict[str, list[float]] : loss history per mode.
     """
+    if device is not None:
+        model.to(device)
     histories = {}
     for i, mname in enumerate(mode_names):
         if verbose:
