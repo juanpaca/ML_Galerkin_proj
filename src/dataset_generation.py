@@ -1145,6 +1145,8 @@ def train_bubble_on_dataset(
     -------
     list[float] : loss history.
     """
+    if device is not None:
+        model.to(device)
     N = len(mode_data["pe"])
     xi_base = torch.linspace(0.0, 1.0, n_quad, dtype=torch.float32)
     xi_base[0] = 1e-6
