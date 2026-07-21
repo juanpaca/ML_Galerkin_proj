@@ -1,3 +1,109 @@
+# ── VISUALIZE CELL-BASED SPLIT & CHECK COVERAGE ──
+# Cell-based is the most rigorous: entire (Pe, ρ) cells held out → tests
+# true extrapolation to unseen parameter combos, not just interpolation.
+# Use this if you generated with split_strategy="cell".
+#
+# PROBLEM: with few cells (e.g., 9/2/2) and random assignment, some Pe
+# regimes may be entirely missing from val/test.  This cell checks that.
+#
+# FIX: increase n_val_cells / n_test_cells so more regimes are covered,
+# or increase n_samples to populate more cells.
+
+cell_map = ds["metadata"]["cell_map"]
+# Infer Pe bins from cell coordinates (first key is "(pe_idx,rho_idx)")
+pe_bins  = sorted({eval(k)[0] for k in cell_map})
+# Actual Pe bin edges used by _pe_rho_cell (default: 0, 1, 10, 100, 1000, inf)
+# Map pe_idx → regime label
+pe_idx_to_label = ["0-1", "1-10", "10-100", "100-1000", ">1000"]
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+colors = {"train": "#1F4E79", "val": "#F7DC6F", "test": "#E74C3C"}
+
+# Left: Pe vs ρ scatter colored by split
+for sname in ["train", "val", "test"]:
+    pe_s = ds[sname]["constant"]["pe"]
+    rho_s = ds[sname]["constant"]["rho"]
+    axes[0].scatter(pe_s, rho_s, c=colors[sname], alpha=0.3, s=8, label=sname, edgecolors='none')
+axes[0].set_xscale("log")
+axes[0].set_xlabel("Pe")
+axes[0].set_ylabel("ρ")
+axes[0].set_title(f"Cell split: {ds['metadata']['n_train']}/{ds['metadata']['n_val']}/{ds['metadata']['n_test']}")
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+
+# Right: bar chart — which Pe regimes are covered per split?
+def regime_of_pe(pe):
+    if pe > 1e4: return "inf (>1e4)"
+    if pe > 100: return "high (100–1e4)"
+    if pe > 1:   return "mid (1–100)"
+    if pe > 0.01: return "low (0.01–1)"
+    return "diff. (<0.01)"
+
+rows = []
+for sname in ["train", "val", "test"]:
+    rc = {}
+    for pe in ds[sname]["constant"]["pe"]:
+        r = regime_of_pe(pe)
+        rc[r] = rc.get(r, 0) + 1
+    total = sum(rc.values())
+    for regime, cnt in rc.items():
+        rows.append({"split": sname, "regime": regime, "count": cnt, "pct": cnt/total*100})
+
+df = pd.DataFrame(rows)
+regime_order = ["diff. (<0.01)", "low (0.01–1)", "mid (1–100)", "high (100–1e4)", "inf (>1e4)"]
+for reg in regime_order:
+    sub = df[df.regime == reg]
+    if len(sub):
+        axes[1].bar(sub.split, sub.pct, label=reg, alpha=0.7)
+axes[1].set_ylabel("% of split")
+axes[1].set_title("Pe regime coverage per split")
+axes[1].legend(fontsize=8)
+axes[1].grid(True, alpha=0.3, axis="y")
+plt.tight_layout()
+plt.show()
+
+# Print cell assignment table
+print(f"\n{'Pe regime':<20s} {'Pe_idx':<8s} {'Cell count':<12s} {'Splits':<20s}")
+print("-"*60)
+cell_coords_used = set()
+for c_str, (split, _) in cell_map.items():
+    cell_coords_used.add(c_str)
+pe_regimes_seen = {}
+for c_str, (split, _) in cell_map.items():
+    pe_idx, rho_idx = eval(c_str)  # (pe_idx, rho_idx)
+    label = pe_idx_to_label[pe_idx] if pe_idx < len(pe_idx_to_label) else f">1000"
+    key = (label, pe_idx)
+    if key not in pe_regimes_seen:
+        pe_regimes_seen[key] = {"train": 0, "val": 0, "test": 0}
+    pe_regimes_seen[key][split] += 1
+
+for (label, pe_idx) in sorted(pe_regimes_seen.keys(), key=lambda x: x[1]):
+    cnts = pe_regimes_seen[(label, pe_idx)]
+    total = sum(cnts.values())
+    splits_str = f"{cnts['train']}tr / {cnts['val']}va / {cnts['test']}te"
+    print(f"{label:<20s} {pe_idx:<8d} {total:<12d} {splits_str:<20s}")
+
+# Flag missing regimes
+for sname in ["val", "test"]:
+    seen_regimes = set()
+    for pe in ds[sname]["constant"]["pe"]:
+        seen_regimes.add(regime_of_pe(pe))
+    missing = set(regime_order) - seen_regimes
+    if missing:
+        print(f"  ⚠  {sname} MISSING regimes: {missing}")
+    else:
+        print(f"  ✓  {sname} covers all regimes")
+
+# No-leakage check
+train_ids = set(ds["metadata"]["split_indices"]["train"])
+val_ids   = set(ds["metadata"]["split_indices"]["val"])
+test_ids  = set(ds["metadata"]["split_indices"]["test"])
+print(f"\nSamples: {len(train_ids)} train / {len(val_ids)} val / {len(test_ids)} test")
+print(f"Overlap train∩val: {len(train_ids & val_ids)}")
+print(f"Overlap train∩test: {len(train_ids & test_ids)}")
+print("→ No leakage" if not (train_ids & val_ids or train_ids & test_ids) else "→ LEAKAGE DETECTED!")
+
+
 # ── VISUALIZE STRATIFIED SPLIT & CHECK NO LEAKAGE ──
 # Pe regimes used by the stratified split
 regime_edges = [0.01, 1.0, 100.0, 1e4]
