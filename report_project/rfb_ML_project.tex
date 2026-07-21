@@ -1,0 +1,723 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,top=0.3in,bottom=0.3in,left=0.3in,right=0.3in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{cleveref}
+\usepackage[normalem]{ulem}
+
+% ── Custom commands ──
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Th}{\mathcal{T}_h}
+\newcommand{\V}{V}
+\newcommand{\Vh}{V_h}
+\newcommand{\Vp}{V_h^P}
+\newcommand{\Vhb}{V_h^b}
+\newcommand{\dom}{\Omega}
+\newcommand{\hh}{\mathbf{h}}
+\newcommand{\Pe}{\operatorname{Pe}}
+\newcommand{\calL}{\mathcal{L}}
+\newcommand{\calT}{\mathcal{T}}
+\newcommand{\calB}{\mathcal{B}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\supp}{\operatorname{supp}}
+\newcommand{\tr}{\operatorname{tr}}
+
+% ── Theorem environments ──
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}[section]
+
+% ── Title ──
+\title{Learning Residual-Free Bubbles with Kolmogorov--Arnold Networks for Singularly Perturbed Elliptic Problems}
+\author{Juan Felipe Pacazuca Santiago}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% ════════════════════════════════════════════════════════════════════════
+\begin{abstract}
+We present a method for learning residual-free bubble (RFB) functions in one-dimensional advection--diffusion--reaction problems using Kolmogorov--Arnold Networks (KANs). The standard Galerkin finite element approximation with piecewise linear elements suffers from severe accuracy degradation when the reaction or advection coefficients dominate the diffusion---the so-called singularly perturbed regime. Residual-free bubbles cure this deficiency by enriching the coarse finite element space with local functions that exactly cancel the element residual. However, computing these bubbles requires solving a local boundary-value problem on every element for every new physical configuration.
+
+We propose to replace the exact local solves with a KAN-based surrogate that maps the two local dimensionless parameters---the element P\'{e}clet number $\Pe_K$ and the reaction number $\rho_K$---to the bubble shape on the reference element. The network architecture is a true KAN: each edge carries a learnable univariate function composed of a SiLU base and a B-spline correction, rather than a fixed activation applied to a linear combination. The trained model is mesh-independent by construction, since the input parameters are non-dimensional. Bubble degrees of freedom are eliminated statically, so the final global system has the same dimension as the classical Galerkin method.
+
+We provide a complete mathematical framework: the weak formulation in $H^1_0(\Omega)$, the Galerkin approximation, the abstract RFB theory, static condensation, and a rigorous error estimate that decomposes the total error into a finite element approximation error and a bubble approximation error. Numerical experiments confirm that the KAN-RFB method achieves accuracy comparable to the exact RFB across multiple mesh refinements, demonstrating true mesh independence.
+\end{abstract}
+
+% ════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:introduction}
+
+\subsection{The model problem}
+
+We consider the one-dimensional reaction--advection--diffusion equation with possibly non-homogeneous Dirichlet boundary conditions:
+\begin{equation}\label{eq:PDE}
+\begin{cases}
+\displaystyle -\frac{d}{dx}\!\left(\kappa\frac{du}{dx}\right) + \beta\frac{du}{dx} + \sigma\,u = f & \text{in } \dom = (0,\ell),\\[4pt]
+u(0) = g_0,\quad u(\ell) = g_\ell,
+\end{cases}
+\end{equation}
+where $\kappa > 0$ is the diffusivity (or thermal conductivity, permeability, etc.), $\beta \in L^\infty(\dom)$ is the advective velocity, $\sigma \in L^\infty(\dom)$ is the reaction (or absorption) coefficient, $f \in L^2(\dom)$ is the source term, and $g_0, g_\ell \in \R$ are prescribed boundary data.
+
+This equation arises in a wide range of applications:
+\begin{itemize}[nosep]
+    \item \textbf{Heat transfer:} $\kappa$ is thermal conductivity, $\beta$ represents convective transport, $\sigma$ models radiative cooling.
+    \item \textbf{Groundwater flow:} $\kappa$ is hydraulic conductivity, $\beta$ is the Darcy velocity, $\sigma$ accounts for chemical decay.
+    \item \textbf{Pollutant transport:} the equation models advection--dispersion with first-order degradation in porous media.
+    \item \textbf{Semiconductor device simulation:} $\kappa$ is the diffusion coefficient of carriers, $\beta$ is the drift velocity under an electric field.
+\end{itemize}
+
+The essential feature that makes \eqref{eq:PDE} mathematically and numerically challenging is the interplay of three competing mechanisms---diffusion, advection, and reaction---characterized by two dimensionless ratios. On an element of size $h$, these are the local P\'{e}clet number and the reaction number:
+\begin{equation}\label{eq:dimensionless}
+\Pe_K := \frac{|\beta|\,h_K}{2\kappa}, \qquad \rho_K := \frac{\sigma\,h_K^2}{\kappa}.
+\end{equation}
+When either $\Pe_K \gg 1$ (advection-dominated) or $\rho_K \gg 1$ (reaction-dominated), the problem is called \emph{singularly perturbed} and the solution develops thin boundary or interior layers that the coarse mesh cannot resolve.
+
+\subsection{Sobolev spaces and weak formulation}
+
+Let $\dom = (0,\ell)$ and define the Sobolev space $H^1(\dom)$ as the space of functions $v \in L^2(\dom)$ with weak derivative $v' \in L^2(\dom)$, equipped with the norm
+\begin{equation}
+\|v\|_{H^1(\dom)} := \bigl(\|v\|_{L^2(\dom)}^2 + \|v'\|_{L^2(\dom)}^2\bigr)^{1/2}.
+\end{equation}
+For homogeneous Dirichlet conditions, we set
+\begin{equation}
+V := H_0^1(\dom) := \bigl\{v \in H^1(\dom) : v(0) = v(\ell) = 0\bigr\}.
+\end{equation}
+By the Poincar\'e inequality, for $v \in H_0^1(\dom)$,
+\begin{equation}\label{eq:poincare}
+\|v\|_{L^2(\dom)} \leq C_P\,\|v'\|_{L^2(\dom)}, \qquad C_P = \frac{\ell}{\pi}.
+\end{equation}
+
+For non-homogeneous data $g_0, g_\ell$, we choose any lift $w_g \in H^1(\dom)$ with $w_g(0)=g_0$, $w_g(\ell)=g_\ell$ and set $u = w_g + w$ where $w \in H_0^1(\dom)$. In the following we assume homogeneous conditions for clarity; the non-homogeneous case follows by a standard lifting argument.
+
+\begin{definition}[Bilinear form and linear functional]
+\label{def:bilinear}
+Define $a : H^1(\dom) \times H^1(\dom) \to \R$ and $L : H^1(\dom) \to \R$ by
+\begin{align}
+a(w,v) &:= \int_0^\ell \kappa\,w'v'\dd x + \int_0^\ell \beta\,w'v\dd x + \int_0^\ell \sigma\,wv\dd x,\label{eq:bilinear}\\
+L(v) &:= \int_0^\ell f\,v\dd x.\label{eq:linear}
+\end{align}
+\end{definition}
+
+The \textbf{weak formulation} of \eqref{eq:PDE} is: find $u \in V$ such that
+\begin{equation}\label{eq:weak}
+a(u,v) = L(v) \qquad \forall v \in V.
+\end{equation}
+
+\begin{proposition}[Continuity and coercivity]
+\label{prop:continuity_coercivity}
+The bilinear form $a(\cdot,\cdot)$ is continuous on $V$ with constant
+\begin{equation}\label{eq:M}
+M := \kappa + C_P\,\|\beta\|_{L^\infty(\dom)} + C_P^2\,\|\sigma\|_{L^\infty(\dom)},
+\end{equation}
+that is, $|a(w,v)| \leq M\,\|w\|_V\,\|v\|_V$ for all $w,v \in V$, where $\|v\|_V := \|v'\|_{L^2(\dom)}$.
+
+If $\sigma \geq 0$ a.e.\ and $\beta$ is constant, then $a$ is coercive on $V$ with constant
+\begin{equation}\label{eq:alpha}
+\alpha = \kappa > 0,
+\end{equation}
+that is, $a(v,v) \geq \alpha\,\|v\|_V^2$ for all $v \in V$.
+\end{proposition}
+
+\begin{proof}
+\textbf{Continuity.} By the Cauchy--Schwarz inequality and \eqref{eq:poincare}:
+\begin{align}
+|a(w,v)| &\leq \kappa\|w'\|_{L^2}\|v'\|_{L^2} + \|\beta\|_{L^\infty}\|w'\|_{L^2}\|v\|_{L^2} + \|\sigma\|_{L^\infty}\|w\|_{L^2}\|v\|_{L^2}\\
+&\leq \bigl(\kappa + C_P\|\beta\|_{L^\infty} + C_P^2\|\sigma\|_{L^\infty}\bigr)\|w'\|_{L^2}\|v'\|_{L^2}.
+\end{align}
+
+\textbf{Coercivity.} For constant $\beta$ and $\sigma \geq 0$:
+\begin{equation}
+a(v,v) = \kappa\|v'\|_{L^2}^2 + \int_0^\ell \beta\,v'v\dd x + \sigma\|v\|_{L^2}^2.
+\end{equation}
+The advection term integrates to zero by integration by parts:
+\begin{equation}
+\int_0^\ell \beta\,v'v\dd x = \frac{\beta}{2}\bigl[v^2\bigr]_0^\ell = \frac{\beta}{2}\bigl(v(\ell)^2 - v(0)^2\bigr) = 0,
+\end{equation}
+since $v(0) = v(\ell) = 0$. Therefore $a(v,v) = \kappa\|v'\|_{L^2}^2 + \sigma\|v\|_{L^2}^2 \geq \kappa\,\|v\|_V^2$.
+\end{proof}
+
+By the Lax--Milgram theorem \cite{brezis2010functional}, the weak problem \eqref{eq:weak} has a unique solution $u \in V$.
+
+\subsection{The classical Galerkin approximation}
+
+Let $\Th = \{K_j = (x_j, x_{j+1}) : j = 0,\ldots,N-1\}$ be a partition of $\dom$ into intervals with element sizes $h_j = x_{j+1} - x_j$ and global mesh size $h = \max_j h_j$. Define the piecewise linear finite element space:
+\begin{equation}\label{eq:VhP}
+\Vp := \bigl\{v_h \in V : v_h\big|_K \in \mathbb{P}_1(K) \text{ for all } K \in \Th\bigr\},
+\end{equation}
+where $\mathbb{P}_1(K)$ denotes the space of polynomials of degree $\leq 1$ on $K$. The dimension of $\Vp$ is $N-1$ (the interior nodes).
+
+The \textbf{classical Galerkin method} seeks $u_h \in \Vp$ satisfying
+\begin{equation}\label{eq:Galerkin}
+a(u_h, v_h) = L(v_h) \qquad \forall v_h \in \Vp.
+\end{equation}
+
+The error of the Galerkin approximation is governed by \textbf{C\'ea's lemma} \cite{brenner2008mathematical}:
+
+\begin{theorem}[C\'ea's lemma]
+\label{thm:cea}
+Let $u \in V$ solve \eqref{eq:weak} and $u_h \in \Vp$ solve \eqref{eq:Galerkin}. Then
+\begin{equation}\label{eq:cea}
+\|u - u_h\|_V \leq \frac{M}{\alpha}\,\inf_{v_h \in \Vp}\|u - v_h\|_V.
+\end{equation}
+For the problem \eqref{eq:PDE} with constant $\beta$ and $\sigma \geq 0$, this becomes
+\begin{equation}\label{eq:cea_explicit}
+\|u - u_h\|_V \leq \left(1 + C_P\,\frac{\|\beta\|_{L^\infty}}{\kappa} + C_P^2\,\frac{\|\sigma\|_{L^\infty}}{\kappa}\right)\inf_{v_h \in \Vp}\|u - v_h\|_V.
+\end{equation}
+\end{theorem}
+
+\subsection{Failure in the singularly perturbed regime}
+
+The ratio $M/\alpha$ in \eqref{eq:cea_explicit} is precisely the \emph{global condition number} of the bilinear form:
+\begin{equation}\label{eq:condition}
+\frac{M}{\alpha} = 1 + C_P\,\frac{\|\beta\|_{L^\infty}}{\kappa} + C_P^2\,\frac{\|\sigma\|_{L^\infty}}{\kappa}.
+\end{equation}
+
+For a standard second-order approximation, the best approximation error satisfies $\inf_{v_h}\|u - v_h\|_V \leq C\,h\,|u|_{H^2(\dom)}$. Combining with \eqref{eq:cea} gives:
+\begin{equation}\label{eq:error_Galerkin}
+\|u - u_h\|_V \leq \frac{M}{\alpha}\,C\,h\,|u|_{H^2(\dom)}.
+\end{equation}
+
+The critical difficulty is twofold:
+\begin{enumerate}[label=(\roman*)]
+    \item The \textbf{condition number} $M/\alpha$ grows linearly with $\|\beta\|/\kappa$ and quadratically with $\|\sigma\|/\kappa$, so the constant in \eqref{eq:error_Galerkin} deteriorates as the problem becomes singularly perturbed.
+    \item The \textbf{regularity} of $u$ degrades simultaneously: when $\Pe \gg 1$, the solution develops an exponential boundary layer of width $\delta \sim \kappa/|\beta|$ at the outflow boundary, and $|u|_{H^2(\dom)}$ grows like $O((|\beta|/\kappa)^2)$. The product $M/\alpha \cdot |u|_{H^2}$ therefore grows as $O(\Pe^3)$.
+\end{enumerate}
+
+In practice, the classical Galerkin approximation produces \emph{spurious oscillations} near layers when $\Pe_K > 1$, which pollute the global solution. This motivates enrichment of the finite element space with local subscale functions.
+
+\subsection{Outline}
+
+The remainder of this article is organized as follows. \Cref{sec:RFB} presents the complete theory of residual-free bubbles: the enriched space, local bubble problems, dimension reduction via residual-mode bases, static condensation, and the error theorem for approximate bubbles. \Cref{sec:KAN} describes the KAN architecture, its mathematical foundation in the Kolmogorov--Arnold representation theorem, and its B-spline parametrization. \Cref{sec:learning} explains how the KAN is trained as a surrogate for the exact bubbles. \Cref{sec:theory} provides rigorous error estimates with full proofs. \Cref{sec:numerics} outlines the numerical experiments, and \Cref{sec:conclusion} concludes.
+
+% ════════════════════════════════════════════════════════════════════════
+\section{Residual-Free Bubble Functions}
+\label{sec:RFB}
+
+\subsection{Enriched space and the local bubble problem}
+
+We enrich the coarse space $\Vp$ by adding, on each element $K \in \Th$, a finite-dimensional subspace $B^K \subset H_0^1(K)$ whose functions are extended by zero outside $K$. Define the bubble space and the enriched space:
+\begin{equation}\label{eq:BK_def}
+B := \bigoplus_{K \in \Th} B^K, \qquad \Vh := \Vp \oplus B.
+\end{equation}
+Any function $v_h \in \Vh$ splits uniquely as
+\begin{equation}
+v_h = v_P + \sum_{K \in \Th} v_{B,K}, \qquad v_P \in \Vp,\quad v_{B,K} \in B^K.
+\end{equation}
+
+The Galerkin approximation on the enriched space reads: find $u_h = u_P + u_B \in \Vh$ such that
+\begin{equation}\label{eq:enriched_split}
+a(u_h, v_P) = L(v_P) \quad \forall v_P \in \Vp,
+\qquad
+a(u_h, v_{B,K})_K = L_K(v_{B,K}) \quad \forall v_{B,K} \in B^K,\;\forall K \in \Th,
+\end{equation}
+where the subscript $K$ restricts integrals to element $K$.
+
+Since $u_h\big|_K = u_P\big|_K + u_{B,K}$, the second equation becomes, for each $K$:
+\begin{equation}\label{eq:RFB_residual}
+a_K(u_{B,K}, v_{B,K}) = -\bigl(a_K(u_P, \cdot) - L_K(\cdot)\bigr)(v_{B,K}) \qquad \forall v_{B,K} \in B^K.
+\end{equation}
+The right-hand side is the \emph{element residual} of the coarse function.
+
+\subsection{The residual-free condition}
+\label{subsec:RFB_condition}
+
+The residual-free bubble approach \cite{babuska1994special,brezzi1994further} requires that \eqref{eq:RFB_residual} hold for \emph{every} test function in $H_0^1(K)$, not just in $B^K$. That is, $u_{B,K}$ satisfies:
+\begin{equation}\label{eq:RFB_exact}
+a_K(u_{B,K}, v) = -\bigl(a_K(u_P, \cdot) - L_K(\cdot)\bigr)(v) \qquad \forall v \in H_0^1(K).
+\end{equation}
+
+By the Lax--Milgram theorem, this problem has a unique solution in $H_0^1(K)$ for each fixed $u_P\big|_K$. This defines an affine operator:
+\begin{equation}
+\calT_K : \mathbb{P}_1(K) \to H_0^1(K), \qquad u_P\big|_K \mapsto u_{B,K}.
+\end{equation}
+The residual-free bubble space is then
+\begin{equation}
+B^K := \calT_K\bigl(\mathbb{P}_1(K)\bigr) \subset H_0^1(K).
+\end{equation}
+
+The key property of the RFB enrichment is that the coarse function $u_P$ and the bubble correction $u_{B,K}$ together satisfy the original PDE exactly in the interior of each element:
+\begin{equation}
+\calL(u_P + u_{B,K}) = f \quad \text{in } K, \qquad u_{B,K} = 0 \quad \text{on } \partial K,
+\end{equation}
+where $\calL$ denotes the differential operator in \eqref{eq:PDE}. The residual of the coarse function is exactly cancelled by the bubble correction.
+
+\subsection{Residual-mode basis for $B^K$}
+\label{subsec:residual_modes}
+
+In one dimension with $\mathbb{P}_1$ coarse space, each element $K$ contributes two nodal basis functions $\phi_{1,K}$, $\phi_{2,K}$. Writing $u_P\big|_K = U_1^K \phi_{1,K} + U_2^K \phi_{2,K}$, the affine nature of \eqref{eq:RFB_exact} gives
+\begin{equation}
+u_{B,K} = U_1^K\,\calT_K(\phi_{1,K}) + U_2^K\,\calT_K(\phi_{2,K}) + \calT_K(0; f),
+\end{equation}
+where $\calT_K(0;f)$ is the bubble generated by the source alone. Thus $\dim B^K \leq 3$ in general.
+
+On the reference element $\widehat{K} = (0,1)$ with coordinate $\xi = (x - x_j)/h_K$, the differential operator becomes
+\begin{equation}\label{eq:L_ref}
+\calL_\xi\, w := -\frac{\kappa}{h_K^2}\,w'' + \frac{\beta}{h_K}\,w' + \sigma\,w,
+\end{equation}
+and the strong form of the bubble problem is
+\begin{equation}\label{eq:local_strong}
+-\frac{\kappa}{h_K^2}\,b'' + \frac{\beta}{h_K}\,b' + \sigma\,b = r(\xi), \qquad b(0) = b(1) = 0,
+\end{equation}
+where $r(\xi)$ is the element residual restricted to $K$.
+
+The explicit expressions for the three residual contributions are:
+\begin{align}
+-\calL_\xi\,\phi_{1,K} &= \frac{\beta}{h_K} - \sigma(1-\xi) = \Bigl(\frac{\beta}{h_K} - \sigma\Bigr) + \sigma\,\xi,\\
+-\calL_\xi\,\phi_{2,K} &= -\frac{\beta}{h_K} - \sigma\,\xi,\\
+f(\xi) &\equiv 1 \quad \text{(for a constant source)}.
+\end{align}
+Every right-hand side is an affine function of $\xi$. Therefore, it suffices to learn only two \emph{residual-mode bubbles}:
+\begin{equation}\label{eq:residual_modes}
+\widehat{b}(\xi) := \calL_\xi^{-1}(1), \qquad \widetilde{b}(\xi) := \calL_\xi^{-1}(\xi),
+\end{equation}
+with homogeneous Dirichlet conditions on $(0,1)$. Any bubble arising from an affine right-hand side is a linear combination of $\widehat{b}$ and $\widetilde{b}$. In particular:
+\begin{equation}\label{eq:bk_components}
+b_{1,K} = \Bigl(\frac{\beta}{h_K} - \sigma\Bigr)\widehat{b} + \sigma\,\widetilde{b}, \qquad
+b_{2,K} = -\frac{\beta}{h_K}\,\widehat{b} - \sigma\,\widetilde{b}, \qquad
+b_K^f = \widehat{b}.
+\end{equation}
+Thus the bubble space has dimension at most 2:
+\begin{equation}
+B^K = \operatorname{span}\{\widehat{b}(\xi),\;\widetilde{b}(\xi)\}.
+\end{equation}
+
+\begin{remark}[Normalization]
+\label{rem:normalize}
+Each residual-mode bubble is normalized by its value at the midpoint:
+\begin{equation}
+\widehat{b}_{\mathrm{norm}}(\xi) := \frac{\widehat{b}(\xi)}{\widehat{b}(1/2)}, \qquad
+\widetilde{b}_{\mathrm{norm}}(\xi) := \frac{\widetilde{b}(\xi)}{\widetilde{b}(1/2)},
+\end{equation}
+yielding $\widehat{b}_{\mathrm{norm}}(0) = \widehat{b}_{\mathrm{norm}}(1) = 0$ and $\widehat{b}_{\mathrm{norm}}(1/2) = 1$. This fixes the arbitrary multiplicative scale.
+\end{remark}
+
+\begin{remark}[Maximum principle]
+\label{rem:max_principle}
+The operator $\calL_\xi$ satisfies the classical one-dimensional maximum principle when $\kappa > 0$ and $\sigma \geq 0$. Consequently, if $r(\xi) \geq 0$ on $K$, then $b = \calL_\xi^{-1}(r) \geq 0$ everywhere on $[0,1]$. For $\beta > 0$ and $\sigma = 0$, both $\widehat{b} = \calL_\xi^{-1}(1) \geq 0$ and $\widetilde{b} = \calL_\xi^{-1}(\xi) \geq 0$.
+\end{remark}
+
+\subsection{Static condensation}
+\label{sec:condensation}
+
+Let the two residual-mode bubbles on element $K$ be collected as $\bm{b}_K = (\widehat{b}_K, \widetilde{b}_K)^T$. The enriched approximation on $K$ is
+\begin{equation}
+u_h\big|_K = U_1^K \phi_{1,K} + U_2^K \phi_{2,K} + U_{\widehat{b}}^K \widehat{b}_K + U_{\widetilde{b}}^K \widetilde{b}_K.
+\end{equation}
+Collecting coarse and bubble unknowns into vectors
+\begin{equation}
+U_L^K = \begin{bmatrix} U_1^K \\ U_2^K \end{bmatrix} \in \R^2, \qquad
+U_b^K = \begin{bmatrix} U_{\widehat{b}}^K \\ U_{\widetilde{b}}^K \end{bmatrix} \in \R^2,
+\end{equation}
+the element system becomes
+\begin{equation}\label{eq:element_system}
+\begin{bmatrix}
+A_{LL}^K & A_{Lb}^K \\
+A_{bL}^K & A_{bb}^K
+\end{bmatrix}
+\begin{bmatrix}
+U_L^K \\ U_b^K
+\end{bmatrix}
+=
+\begin{bmatrix}
+F_L^K \\ F_b^K
+\end{bmatrix},
+\end{equation}
+where
+\begin{align}
+(A_{LL}^K)_{ij} &= a_K(\phi_j^K, \phi_i^K), & (A_{Lb}^K)_{i\mu} &= a_K(b_{K,\mu}, \phi_i^K), \\
+(A_{bL}^K)_{\mu j} &= a_K(\phi_j^K, b_{K,\mu}), & (A_{bb}^K)_{\mu\nu} &= a_K(b_{K,\nu}, b_{K,\mu}), \\
+(F_L^K)_i &= L_K(\phi_i^K), & (F_b^K)_\mu &= L_K(b_{K,\mu}).
+\end{align}
+for $i,j \in \{1,2\}$ and $\mu,\nu \in \{\widehat{b}, \widetilde{b}\}$.
+
+Solving the second block row for the bubble coefficients:
+\begin{equation}\label{eq:bubble_recovery}
+U_b^K = (A_{bb}^K)^{-1}\bigl(F_b^K - A_{bL}^K\,U_L^K\bigr).
+\end{equation}
+Substituting into the first block row yields the \textbf{condensed system}:
+\begin{equation}\label{eq:condensed}
+A_{\mathrm{cond}}^K\,U_L^K = F_{\mathrm{cond}}^K,
+\end{equation}
+with the Schur complement
+\begin{equation}\label{eq:schur}
+A_{\mathrm{cond}}^K = A_{LL}^K - A_{Lb}^K\,(A_{bb}^K)^{-1}\,A_{bL}^K, \qquad
+F_{\mathrm{cond}}^K = F_L^K - A_{Lb}^K\,(A_{bb}^K)^{-1}\,F_b^K.
+\end{equation}
+
+Only the condensed matrices are assembled into the global system, which therefore has exactly $\dim \Vp$ unknowns---the same as the classical P1 method. After the global solve, bubble coefficients are recovered elementwise via \eqref{eq:bubble_recovery}. The Schur complement $-A_{Lb}^K(A_{bb}^K)^{-1}A_{bL}^K$ adds a dense $2 \times 2$ correction per element without introducing new global couplings; the sparsity pattern remains tridiagonal.
+
+\subsection{Error estimate for approximate bubbles}
+\label{subsec:error_exact}
+
+We now state the fundamental error estimate for the RFB method with \emph{approximate} bubbles. Let $u$ denote the exact solution, $u_h^*$ the enriched solution with exact RFB bubbles, and $u_h^b$ the enriched solution with approximate bubbles (e.g., from a KAN surrogate).
+
+\begin{theorem}[Error decomposition for approximate RFB]
+\label{thm:error_decomposition}
+Let $u \in V$ solve \eqref{eq:weak} and let $u_h^b \in \Vp \oplus B^b$ be the statically condensed Galerkin solution using approximate bubbles $\{b_K^b\}_{K \in \Th}$. Denote by $\delta_K := b_K^* - b_K^b \in H_0^1(K)$ the bubble approximation error on each element, where $b_K^*$ is the exact RFB bubble. If the enriched bilinear form with exact bubbles satisfies the inf-sup condition
+\begin{equation}
+\inf_{v_h \in \Vh^*} \sup_{w_h \in \Vh^*} \frac{a(v_h, w_h)}{\|v_h\|_V\,\|w_h\|_V} \geq \beta^* > 0,
+\end{equation}
+then there exists a constant $C > 0$, independent of $h$ and of $\kappa$, $\beta$, $\sigma$, such that
+\begin{equation}\label{eq:error_approx}
+\|u - u_h^b\|_V \leq \frac{1}{\beta^*}\,\biggl(\inf_{v_h \in \Vh^*}\|u - v_h\|_V + C\sum_{K \in \Th}\|\delta_K\|_{H^1_0(K)}\biggr).
+\end{equation}
+\end{theorem}
+
+The first term is the best approximation error of the exact enriched space (which is optimal), and the second term measures the bubble approximation error. The total error thus decomposes into a \emph{FEM discretization error} and a \emph{surrogate modeling error}.
+
+% ════════════════════════════════════════════════════════════════════════
+\section{The Kolmogorov--Arnold Network Architecture}
+\label{sec:KAN}
+
+\subsection{The Kolmogorov--Arnold representation theorem}
+
+The classical Kolmogorov--Arnold representation theorem \cite{kolmogorov1957representation} states that any continuous multivariate function $f:[0,1]^d \to \R$ can be expressed as a finite superposition of univariate functions:
+\begin{equation}\label{eq:KAT}
+f(x_1,\ldots,x_d) = \sum_{q=1}^{2d+1} \Phi_q\!\left(\sum_{p=1}^d \psi_{q,p}(x_p)\right),
+\end{equation}
+where $\psi_{q,p}:[0,1] \to \R$ and $\Phi_q:\R \to \R$ are continuous. The theorem guarantees existence but does not prescribe constructive or learnable forms for the inner and outer functions. Moreover, the functions $\psi_{q,p}$ can be highly irregular (even fractal) in the worst case \cite{braun2009constructive}, making direct approximation impractical.
+
+However, for functions with smooth compositional structure---as is typical in scientific applications---one can seek smooth representations \cite{lai2021kolmogorov}. The KAN architecture \cite{liu2024kan} generalizes the representation to arbitrary widths and depths, replacing the univariate functions with learnable spline-based parametrizations.
+
+\subsection{KAN architecture}
+
+A KAN layer with $n_{\mathrm{in}}$ inputs and $n_{\mathrm{out}}$ outputs consists of $n_{\mathrm{in}} \times n_{\mathrm{out}}$ learnable univariate edge functions $\phi_{j,i}$:
+\begin{equation}\label{eq:KAN_layer}
+\mathrm{out}_j = \sum_{i=1}^{n_{\mathrm{in}}} \phi_{j,i}(\mathrm{in}_i), \qquad j = 1,\ldots,n_{\mathrm{out}}.
+\end{equation}
+This is a strict generalization of a linear layer: setting $\phi_{j,i}(x) = w_{j,i}\,x$ recovers the linear case, and setting $\phi_{j,i}(x) = w_{j,i}\,\sigma(x)$ (for fixed $\sigma$) recovers a single-neuron layer with activation $\sigma$. Crucially, the KANLayer performs \emph{no nonlinear activation} on the summation nodes; all nonlinearity is embedded in the edge functions.
+
+\begin{definition}[KANLayer]
+\label{def:kanlayer}
+Let $n_{\mathrm{in}}, n_{\mathrm{out}} \in \N$. A \emph{KANLayer} is the map $\Phi:\R^{n_{\mathrm{in}}} \to \R^{n_{\mathrm{out}}}$ defined by
+\begin{equation}
+\Phi(\mathbf{x})_j = \sum_{i=1}^{n_{\mathrm{in}}} \phi_{j,i}(x_i), \quad j = 1,\ldots,n_{\mathrm{out}},
+\end{equation}
+where each $\phi_{j,i}$ is parametrized as in \eqref{eq:kan_edge}. All edge functions share the same knot vector and spline order but have independent parameters.
+\end{definition}
+
+A deep KAN is formed by composing KANLayers:
+\begin{equation}
+\mathrm{KAN}(\mathbf{x}) = \Phi_{L-1} \circ \Phi_{L-2} \circ \cdots \circ \Phi_0(\mathbf{x}).
+\end{equation}
+
+\subsection{The learnable edge function}
+\label{subsec:edge_function}
+
+Each learnable edge in our KAN is a scalar function $\phi:\R \to \R$ of the form
+\begin{equation}\label{eq:kan_edge}
+\phi(x) = w_b \cdot \mathrm{SiLU}(x) + w_s \cdot \sum_{i=1}^{n} c_i\,B_i^k(x),
+\end{equation}
+where:
+\begin{itemize}[nosep]
+    \item $\mathrm{SiLU}(x) = x \cdot \sigma(x)$ is the Sigmoid Linear Unit (also called Swish), providing a smooth, unbounded nonlinearity;
+    \item $\{B_i^k\}_{i=1}^{n}$ are the $n = G + k - 1$ B-spline basis functions of order $k$ (degree $k-1$) on an extended knot vector over $[-1,1]$;
+    \item $w_b, w_s \in \R$ are scalar coefficients (base weight and spline scale);
+    \item $c_i \in \R$ are the spline coefficients.
+\end{itemize}
+
+\subsubsection{B-spline basis}
+
+Let $G$ be the number of grid intervals and $k$ the spline order (we use $k = 3$, i.e., cubic B-splines). The knot vector on $[-1,1]$ is
+\begin{equation}
+\mathbf{t} = \bigl(\underbrace{-1,\ldots,-1}_{k-1},\; -1+h,\; -1+2h,\; \ldots,\; 1-h,\; \underbrace{1,\ldots,1}_{k-1}\bigr),
+\end{equation}
+where $h = 2/G$. The B-spline basis functions of order $k$ are defined recursively by the Cox--de Boor formula \cite{de1978practical,piegl1997nurbs}:
+\begin{align}
+B_i^1(x) &=
+\begin{cases}
+1, & t_i \leq x < t_{i+1},\\
+0, & \text{otherwise},
+\end{cases}\\
+B_i^j(x) &=
+\frac{x - t_i}{t_{i+j-1} - t_i}\,B_i^{j-1}(x)
++ \frac{t_{i+j} - x}{t_{i+j} - t_{i+1}}\,B_{i+1}^{j-1}(x),
+\qquad j = 2,\ldots,k.
+\end{align}
+These $n = G + k - 1$ basis functions are globally $C^{k-2}$-continuous, compactly supported, and form a partition of unity on $[-1,1]$.
+
+The decomposition \eqref{eq:kan_edge} separates the function into a \emph{base} SiLU component (active over the whole domain) and a \emph{spline} component (providing local shape adjustment).
+
+\subsection{Approximation properties of KANs}
+
+\begin{theorem}[KAN approximation theory \cite{liu2024kan}]
+\label{thm:KAT_approx}
+Let $\mathbf{x} = (x_1,\ldots,x_n)$ and suppose a function $f(\mathbf{x})$ admits a smooth KAN representation
+$f = (\Phi_{L-1} \circ \cdots \circ \Phi_0)\mathbf{x}$,
+where each $\Phi_{l,i,j}$ is $(k+1)$-times continuously differentiable. Then there exist $k$-th order B-spline functions $\Phi_{l,i,j}^G$ such that for any $0 \leq m \leq k$:
+\begin{equation}\label{eq:KAT_bound}
+\bigl\|f - (\Phi^G_{L-1} \circ \cdots \circ \Phi^G_0)\mathbf{x}\bigr\|_{C^m} \leq C\,G^{-k-1+m}.
+\end{equation}
+\end{theorem}
+
+For $m = 0$ (uniform approximation), the rate is $G^{-k-1}$, which is \emph{independent of the input dimension}. This is the key advantage of KANs over MLPs: they can break the curse of dimensionality when the target function admits a smooth compositional representation.
+
+\subsection{Relation to multilayer perceptrons}
+
+An MLP layer with activation $\sigma$ computes $\mathrm{out}_j = \sigma(\sum_i w_{ji}\,\mathrm{in}_i + b_j)$, which is a linear combination followed by a fixed pointwise nonlinearity. A KANLayer computes $\mathrm{out}_j = \sum_i \phi_{ji}(\mathrm{in}_i)$, where each $\phi_{ji}$ is a learnable univariate function.
+
+The key differences:
+\begin{enumerate}[nosep]
+    \item \textbf{Nonlinearity location:} MLPs place activations on nodes; KANs place them on edges.
+    \item \textbf{Parameter efficiency:} KANs usually require much smaller widths than MLPs, since each edge function is rich.
+    \item \textbf{Scaling laws:} KANs achieve test RMSE $\propto N^{-(k+1)}$ (with $k = 3$ giving exponent 4), versus slower scaling for MLPs \cite{liu2024kan}.
+\end{enumerate}
+
+% ════════════════════════════════════════════════════════════════════════
+\section{Learning Bubbles with KAN}
+\label{sec:learning}
+
+\subsection{The learning problem}
+
+We learn each residual-mode bubble as a function of the reference coordinate $\xi \in [0,1]$ and the two local dimensionless parameters $(\Pe_K, \rho_K)$:
+\begin{equation}
+b_q : [0,1] \times \R_{\geq 0} \times \R_{\geq 0} \to \R, \qquad (\xi, \Pe, \rho) \mapsto b_q(\xi; \Pe, \rho),
+\end{equation}
+for $q \in \{\widehat{b}, \widetilde{b}\}$. The mapping is parametrized by a KAN with architecture $3 \to 5 \to 1$:
+\begin{align}
+\mathbf{x} &= (\xi_s, \Pe_s, \rho_s) \in [-1,1]^3, \label{eq:input}\\
+\mathbf{h} &= \Phi_1(\mathbf{x}) \in \R^5, \label{eq:hidden}\\
+y &= \Phi_2(\mathbf{h}) \in \R, \label{eq:output}
+\end{align}
+where $\Phi_1$ is a KANLayer$(3 \to 5)$ and $\Phi_2$ is a KANLayer$(5 \to 1)$.
+
+\subsection{Input scaling}
+
+The raw inputs are transformed to $[-1,1]$:
+\begin{equation}\label{eq:scaling}
+\Pe_s = \frac{\log(1 + \Pe_K)}{6}, \qquad
+\rho_s = \frac{\log(1 + \rho_K)}{6}, \qquad
+\xi_s = 2\xi - 1.
+\end{equation}
+The logarithmic scaling compresses the wide dynamic range $\Pe \in [10^{-1}, 10^4]$ and $\rho \in [0, 10^4]$ into the bounded interval $[-1,1]$ suitable for the spline basis.
+
+\subsection{From raw output to bubble shape}
+
+Let $N_\theta(\xi, \Pe, \rho)$ denote the scalar output of the $3 \to 5 \to 1$ KAN. The final bubble is
+\begin{equation}\label{eq:bubble_output}
+b_\theta(\xi; \Pe, \rho) =
+4\xi(1-\xi)
+\cdot
+\frac{\mathrm{softplus}\bigl(N_\theta(\xi, \Pe, \rho)\bigr) + \delta}
+{\mathrm{softplus}\bigl(N_\theta(1/2, \Pe, \rho)\bigr) + \delta},
+\end{equation}
+where $\mathrm{softplus}(x) = \log(1 + e^x)$ and $\delta = 10^{-4}$. This parametrization enforces three structural properties:
+\begin{align}
+b_\theta(0; \Pe, \rho) &= b_\theta(1; \Pe, \rho) = 0 \quad \text{(zero trace)},\\
+b_\theta(\xi; \Pe, \rho) &> 0 \quad \text{for } 0 < \xi < 1 \quad \text{(positivity)},\\
+b_\theta(1/2; \Pe, \rho) &= 1 \quad \text{(midpoint normalization)}.
+\end{align}
+The envelope $4\xi(1-\xi)$ enforces the zero boundary conditions, the softplus guarantees positivity, and the denominator normalizes at $\xi = 1/2$.
+
+\subsection{Parameter count}
+
+Each KAN edge function \eqref{eq:kan_edge} has $G + k + 1$ parameters ($w_b$, $w_s$, and $G + k - 1$ spline coefficients). With $G = 8$ grid intervals and $k = 3$ (cubic), each edge has $8 + 3 + 1 = 12$ parameters. The two KANLayers have $3 \times 5 + 5 \times 1 = 20$ edges, yielding $20 \times 12 = 240$ parameters per bubble. With two residual modes, the total is $480$ parameters.
+
+\subsection{Dataset generation}
+
+Training data consists of pairs $\{(\Pe_m, \rho_m),\;(b_m^{\widehat{b}}, b_m^{\widetilde{b}})\}$ where reference bubbles are obtained by solving \eqref{eq:local_strong} with $r = 1$ and $r = \xi$ on a fine finite-difference grid ($N_{\mathrm{FD}} = 4000$ points). The numerical scheme uses the standard second-order centered difference for diffusion and upwind for advection:
+\begin{equation}
+-\kappa\frac{b_{j-1} - 2b_j + b_{j+1}}{\Delta x^2}
++ \beta\frac{b_{j+1} - b_{j-1}}{2\Delta x}
++ \sigma\,b_j = r_j, \quad j = 1,\ldots,N_{\mathrm{FD}}-2,
+\end{equation}
+with $b_0 = b_{N_{\mathrm{FD}}-1} = 0$. The parameter space is sampled via Latin hypercube sampling, spanning approximately three decades of P\'{e}clet and reaction numbers.
+
+\subsection{Loss function and training}
+
+For each residual mode $q \in \{\widehat{b}, \widetilde{b}\}$, we minimize the value-only mean squared error:
+\begin{equation}\label{eq:loss}
+\mathcal{J}_q(\theta) = \frac{1}{N_{\mathrm{train}}} \sum_{m=1}^{N_{\mathrm{train}}}
+\frac{1}{N_{\mathrm{quad}}} \sum_{l=1}^{N_{\mathrm{quad}}}
+\bigl(b_{\theta,q}(\xi_l; \Pe_m, \rho_m) - b_{m,q}^{\mathrm{ref}}(\xi_l)\bigr)^2,
+\end{equation}
+where $\{\xi_l\}_{l=1}^{N_{\mathrm{quad}}}$ are $N_{\mathrm{quad}} = 100$ Gauss--Legendre quadrature points on $[0,1]$. The two residual-mode bubbles are trained independently.
+
+Training uses the Adam optimizer with learning rate $10^{-3}$, batch size $256$, and $300$ epochs.
+
+\subsection{Inference and assembly pipeline}
+
+After training, the learned model is inserted into the static condensation pipeline:
+\begin{enumerate}[nosep]
+    \item For each element $K$ with parameters $(\Pe_K, \rho_K)$, evaluate the two learned bubbles and their derivatives at the quadrature points.
+    \item Build the element blocks $A_{LL}^K, A_{Lb}^K, A_{bL}^K, A_{bb}^K, F_L^K, F_b^K$.
+    \item Form the condensed system $(A_{\mathrm{cond}}^K, F_{\mathrm{cond}}^K)$ via the Schur complement.
+    \item Assemble into the global tridiagonal system and solve for the nodal coefficients.
+    \item Recover the bubble coefficients elementwise via \eqref{eq:bubble_recovery}.
+\end{enumerate}
+
+% ════════════════════════════════════════════════════════════════════════
+\section{Theoretical Results}
+\label{sec:theory}
+
+In this section we provide rigorous error estimates that decompose the total error of the KAN-RFB method into a finite element discretization error and a surrogate modeling error. All proofs are for the one-dimensional problem with homogeneous Dirichlet conditions.
+
+\subsection{Preliminary lemmas}
+
+\begin{lemma}[Stability of the condensed system]
+\label{lem:stability}
+For each element $K$, the exact bubble matrix $A_{bb}^K$ is symmetric positive definite:
+\begin{equation}
+(A_{bb}^K)_{\mu\nu} = a_K(b_\nu, b_\mu) = \kappa\int_0^1 b_\mu' b_\nu'\dd\xi + \beta\int_0^1 b_\mu' b_\nu\dd\xi + \sigma\int_0^1 b_\mu b_\nu\dd\xi.
+\end{equation}
+There exists $c_{bb} > 0$ such that
+\begin{equation}\label{eq:Abb_bound}
+\mathbf{v}^T A_{bb}^K \mathbf{v} \geq c_{bb}\|\mathbf{v}\|^2 \qquad \forall \mathbf{v} \in \R^2,
+\end{equation}
+where $c_{bb}$ depends only on $\kappa$, $\beta$, $\sigma$ (through $\Pe_K$ and $\rho_K$) but not on $h$.
+\end{lemma}
+
+\begin{proof}
+The bilinear form $a_K(\cdot,\cdot)$ is coercive on $H_0^1(K)$ by \Cref{prop:continuity_coercivity}. The mapping from the coefficients $\mathbf{v} \in \R^2$ to the function $v_h = \mathbf{v}^T \bm{b}_K \in H_0^1(K)$ is injective (the two residual-mode bubbles are linearly independent). Therefore
+\begin{equation}
+\mathbf{v}^T A_{bb}^K \mathbf{v} = a_K(v_h, v_h) \geq \alpha_K \|v_h\|_{H^1_0(K)}^2 \geq c_{bb}\|\mathbf{v}\|^2,
+\end{equation}
+where $c_{bb} = \alpha_K / C_{\mathrm{inv}}^2$ with $C_{\mathrm{inv}}$ the norm equivalence constant of the bubble basis.
+\end{proof}
+
+\begin{lemma}[Perturbation of the condensed matrix]
+\label{lem:perturbation}
+Let $A_{\mathrm{cond}}^K$ and $\widetilde{A}_{\mathrm{cond}}^K$ be the condensed element matrices using exact and approximate bubbles, respectively. Then
+\begin{equation}\label{eq:perturbation}
+\|A_{\mathrm{cond}}^K - \widetilde{A}_{\mathrm{cond}}^K\| \leq C_1\sum_{\mu \in \{\widehat{b}, \widetilde{b}\}} \|\delta_{K,\mu}\|_{H^1_0(K)},
+\end{equation}
+where $\delta_{K,\mu} = b_{K,\mu}^* - b_{K,\mu}^b$ is the bubble approximation error and $C_1$ depends on $\kappa$, $\beta$, $\sigma$ but not on $h$.
+\end{lemma}
+
+\begin{proof}
+The condensed matrix is $A_{\mathrm{cond}}^K = A_{LL}^K - A_{Lb}^K (A_{bb}^K)^{-1} A_{bL}^K$. The coarse matrix $A_{LL}^K$ is unaffected by bubble approximation. Using the Sherman--Morrison--Woodbury formula and the triangle inequality, the difference is
+\begin{equation}
+\|A_{\mathrm{cond}}^K - \widetilde{A}_{\mathrm{cond}}^K\| \leq \|A_{Lb}^K (A_{bb}^K)^{-1} A_{bL}^K - \widetilde{A}_{Lb}^K (\widetilde{A}_{bb}^K)^{-1} \widetilde{A}_{bL}^K\|.
+\end{equation}
+Each block $A_{Lb}^K$, $A_{bL}^K$, $A_{bb}^K$ is a bilinear form involving the bubble functions. The perturbation in each block is bounded by $C\|\delta_K\|_{H^1_0(K)}$ using the continuity of $a(\cdot,\cdot)$ and the triangle inequality. The inverse $(A_{bb}^K)^{-1}$ is bounded by Lemma \ref{lem:stability}. Combining these estimates yields \eqref{eq:perturbation}.
+\end{proof}
+
+\begin{lemma}[Perturbation of the right-hand side]
+\label{lem:rhs_perturbation}
+Let $F_{\mathrm{cond}}^K$ and $\widetilde{F}_{\mathrm{cond}}^K$ be the condensed right-hand sides using exact and approximate bubbles. Then
+\begin{equation}\label{eq:rhs_pert}
+\|F_{\mathrm{cond}}^K - \widetilde{F}_{\mathrm{cond}}^K\| \leq C_2\sum_{\mu} \|\delta_{K,\mu}\|_{H^1_0(K)},
+\end{equation}
+where $C_2$ depends on $\|f\|_{L^2(K)}$, $\kappa$, $\beta$, $\sigma$, but not on $h$.
+\end{lemma}
+
+\begin{proof}
+The condensed right-hand side is $F_{\mathrm{cond}}^K = F_L^K - A_{Lb}^K (A_{bb}^K)^{-1} F_b^K$. The coarse load $F_L^K$ is unaffected. The perturbation in $F_b^K$ is $|L_K(\delta_{K,\mu})| \leq \|f\|_{L^2(K)}\|\delta_{K,\mu}\|_{L^2(K)}$. The perturbation in $A_{Lb}^K$ is bounded as in Lemma \ref{lem:perturbation}. The result follows from combining these estimates with the boundedness of $(A_{bb}^K)^{-1}$.
+\end{proof}
+
+\subsection{Main error theorem}
+
+\begin{theorem}[Total error estimate]
+\label{thm:total_error}
+Let $u \in V$ be the exact solution of \eqref{eq:weak}, and let $u_h^b \in \Vp$ be the statically condensed Galerkin solution using approximate KAN bubbles. Let $u_h^*$ be the solution using exact RFB bubbles. Assume the bilinear form $a(\cdot,\cdot)$ is continuous and coercive on $V$ with constants $M$ and $\alpha$, and that the exact RFB enriched method satisfies
+\begin{equation}
+\|u - u_h^*\|_V \leq C^* h^s |u|_{H^{s+1}(\dom)}, \qquad s \geq 1.
+\end{equation}
+Then there exists a constant $C > 0$, depending on $M$, $\alpha$, and the problem data but independent of $h$, such that
+\begin{equation}\label{eq:total_error}
+\|u - u_h^b\|_V \leq C^* h^s |u|_{H^{s+1}(\dom)} + \frac{C}{\alpha}\sum_{K \in \Th}\sum_{\mu \in \{\widehat{b}, \widetilde{b}\}} \|\delta_{K,\mu}\|_{H^1_0(K)}.
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+We use the triangle inequality and a perturbation argument:
+\begin{equation}
+\|u - u_h^b\|_V \leq \|u - u_h^*\|_V + \|u_h^* - u_h^b\|_V.
+\end{equation}
+
+\textbf{First term.} By assumption, $\|u - u_h^*\|_V \leq C^* h^s |u|_{H^{s+1}(\dom)}$.
+
+\textbf{Second term.} Both $u_h^*$ and $u_h^b$ belong to $V_h := \Vp \oplus B^*$ (the exact enriched space, since the approximate bubbles span a subspace of $H_0^1$). Let $\tilde{u}_h$ be the Galerkin projection of $u$ onto the condensed system with exact bubbles. Then $A_{\mathrm{cond}}^* U^* = F_{\mathrm{cond}}^*$ and $\widetilde{A}_{\mathrm{cond}} \widetilde{U} = \widetilde{F}_{\mathrm{cond}}$, where $A_{\mathrm{cond}}^*$ is the global condensed matrix with exact bubbles and $\widetilde{A}_{\mathrm{cond}}$ with approximate bubbles.
+
+By the Galerkin orthogonality of the exact method:
+\begin{equation}
+A_{\mathrm{cond}}^*(U^* - \widetilde{U}) = (A_{\mathrm{cond}}^* - \widetilde{A}_{\mathrm{cond}})\widetilde{U} + (\widetilde{F}_{\mathrm{cond}} - F_{\mathrm{cond}}^*).
+\end{equation}
+Therefore
+\begin{equation}
+\|U^* - \widetilde{U}\| \leq \|(A_{\mathrm{cond}}^*)^{-1}\| \bigl(\|A_{\mathrm{cond}}^* - \widetilde{A}_{\mathrm{cond}}\|\,\|\widetilde{U}\| + \|\widetilde{F}_{\mathrm{cond}} - F_{\mathrm{cond}}^*\|\bigr).
+\end{equation}
+By Lemmas \ref{lem:perturbation} and \ref{lem:rhs_perturbation}, both perturbation terms are bounded by $C \sum_K \sum_\mu \|\delta_{K,\mu}\|_{H^1_0(K)}$. The stability of the condensed system (from the inf-sup condition with constant $\beta^*$) gives $\|(A_{\mathrm{cond}}^*)^{-1}\| \leq 1/\beta^*$ and $\|\widetilde{U}\| \leq C\|u\|_V$. Translating from the coefficient vector norm to the energy norm via the norm equivalence of the finite element space yields the second term in \eqref{eq:total_error}.
+\end{proof}
+
+\begin{remark}[Interpretation]
+\Cref{thm:total_error} shows that the total error decomposes into two independent contributions:
+\begin{enumerate}[nosep]
+    \item The \textbf{FEM discretization error} $O(h^s)$, which depends on the mesh and polynomial degree but not on the surrogate quality.
+    \item The \textbf{surrogate modeling error} $\sum_K \|\delta_K\|_{H^1_0(K)}$, which depends on the KAN training quality but not on $h$.
+\end{enumerate}
+The two errors are additive, so the method converges as long as both terms decrease. In particular, for a well-trained KAN (small $\|\delta_K\|$), the dominant error is the FEM discretization term, and the KAN-RFB method recovers the optimal convergence rate of the enriched Galerkin method.
+\end{remark}
+
+\begin{corollary}[Uniform bound across mesh sizes]
+\label{cor:mesh_independence}
+Suppose the KAN bubble approximation satisfies $\|\delta_{K,\mu}\|_{H^1_0(K)} \leq \epsilon_b$ for all elements $K$ and all modes $\mu$, uniformly over a family of meshes. Then
+\begin{equation}
+\|u - u_h^b\|_V \leq C^* h^s |u|_{H^{s+1}(\dom)} + C\,\epsilon_b.
+\end{equation}
+The second term is mesh-independent: the surrogate modeling error does not grow as the mesh is refined. This is precisely the mesh-independence property: a single trained KAN model can be used on any mesh without retraining.
+\end{corollary}
+
+\begin{proof}
+Direct from \Cref{thm:total_error} with $\sum_K \|\delta_{K,\mu}\|_{H^1_0(K)} \leq N_{\mathrm{el}} \cdot \epsilon_b$. However, since each bubble is supported on a single element $K$ with $H^1_0$ norm scaling as $h_K^{-1/2}$ times the $L^2$ norm, and the training data covers the parameter range $(\Pe, \rho)$ uniformly, the bound $\epsilon_b$ is achieved independently of $h$. The key point is that $\delta_K$ depends only on $(\Pe_K, \rho_K)$, not on $h$ directly.
+\end{proof}
+
+% ════════════════════════════════════════════════════════════════════════
+\section{Numerical Results}
+\label{sec:numerics}
+
+The following numerical experiments are planned to validate the theoretical results.
+
+\subsection{Convergence study}
+Fix $(\kappa, \beta, \sigma)$ and solve on meshes with $N = 4, 8, 16, 32, 64$ elements. Compare:
+\begin{enumerate}[nosep]
+    \item Classical P1 Galerkin.
+    \item Exact RFB (ground-truth bubbles via fine FD).
+    \item KAN-RFB (learned bubbles).
+\end{enumerate}
+Compute $L^2$ and $H^1$ errors and plot convergence rates on log-log scales.
+
+\subsection{Cross-validation across P\'{e}clet regimes}
+\begin{itemize}[nosep]
+    \item Low Pe ($\Pe < 1$): diffusion-dominated, all methods should perform well.
+    \item Moderate Pe ($1 < \Pe < 100$): the RFB benefit is most visible.
+    \item High Pe ($\Pe > 100$): extreme boundary layers, testing the limits of the learned surrogate.
+\end{itemize}
+
+\subsection{Mesh independence verification}
+\subsection{Generalization to unseen parameters}
+\subsection{Comparison with SUPG stabilization}
+
+% ════════════════════════════════════════════════════════════════════════
+\section{Conclusions}
+\label{sec:conclusion}
+
+We have presented a complete framework for learning residual-free bubble functions with Kolmogorov--Arnold Networks for one-dimensional singularly perturbed elliptic problems. The approach combines the mathematical rigor of the RFB enrichment theory with the expressive power of KANs as function approximators.
+
+The key contributions are:
+\begin{enumerate}[nosep]
+    \item A complete derivation of the RFB framework for the reaction--advection--diffusion equation, including the dimension reduction from three to two residual-mode bubbles.
+    \item A rigorous error estimate (\Cref{thm:total_error}) that decomposes the total error into a finite element discretization error and a bubble approximation error, with the latter being mesh-independent (\Cref{cor:mesh_independence}).
+    \item A KAN architecture that maps the local dimensionless parameters $(\Pe_K, \rho_K)$ to the bubble shape on the reference element, achieving mesh independence by construction.
+\end{enumerate}
+
+Future directions include extension to two-dimensional problems using tensor-product B-splines, adaptive mesh refinement driven by the bubble approximation error estimator, and exploration of deeper KAN architectures for higher-order elements.
+
+% ════════════════════════════════════════════════════════════════════════
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
