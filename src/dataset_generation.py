@@ -656,6 +656,10 @@ class DatasetConfig:
     n_test_cells : int
         Number of cells to hold out for testing (only when
         ``split_strategy="cell"``).
+    pe_bins : tuple[float, ...] or None
+        Pe bin edges for cell-based split.  If None, uses defaults.
+    rho_bins : tuple[float, ...] or None
+        ρ bin edges for cell-based split.  If None, uses defaults.
     holdout_regime : str or None
         If set, holds out this Pe regime for testing (overrides splits).
     standardize : bool
@@ -681,6 +685,8 @@ class DatasetConfig:
     split_strategy: Literal["stratified", "cell", "random"] = "cell"
     n_val_cells: int = 3
     n_test_cells: int = 3
+    pe_bins: tuple[float, ...] | None = None
+    rho_bins: tuple[float, ...] | None = None
     holdout_regime: str | None = None
     standardize: bool = True
     seed: int = 42
@@ -851,6 +857,8 @@ def generate_dataset(
             pe_all, rho_all,
             n_val_cells=config.n_val_cells,
             n_test_cells=config.n_test_cells,
+            pe_bins=config.pe_bins or (0, 1, 10, 100, 1000, np.inf),
+            rho_bins=config.rho_bins or (-np.inf, 0, 1, 100, np.inf),
             seed=config.seed + 2,
         )
     elif config.split_strategy == "stratified":
