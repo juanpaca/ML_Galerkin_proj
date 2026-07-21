@@ -1,3 +1,80 @@
+# ── VISUALIZE STRATIFIED SPLIT & CHECK NO LEAKAGE ──
+# Pe regimes used by the stratified split
+regime_edges = [0.01, 1.0, 100.0, 1e4]
+regime_labels = ["diff.", "low", "mid", "high", "inf"]
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+colors = {"train": "#1F4E79", "val": "#F7DC6F", "test": "#E74C3C"}
+
+# Left: Pe vs ρ scatter
+for sname in ["train", "val", "test"]:
+    pe_s = ds[sname]["constant"]["pe"]
+    rho_s = ds[sname]["constant"]["rho"]
+    axes[0].scatter(pe_s, rho_s, c=colors[sname], alpha=0.3, s=8, label=sname, edgecolors='none')
+axes[0].set_xscale("log")
+axes[0].set_xlabel("Pe")
+axes[0].set_ylabel("ρ")
+axes[0].set_title("Stratified split: train / val / test")
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+for e in regime_edges:
+    axes[0].axvline(e, color="gray", lw=0.5, ls="--")
+
+# Right: regime proportion bar chart
+def regime_counts(pe_vals):
+    counts = {}
+    for pe in pe_vals:
+        if pe > 1e4:
+            r = "inf"
+        elif pe > 100:
+            r = "high"
+        elif pe > 1:
+            r = "mid"
+        elif pe > 0.01:
+            r = "low"
+        else:
+            r = "diff."
+        counts[r] = counts.get(r, 0) + 1
+    return counts
+
+import pandas as pd
+rows = []
+for sname in ["train", "val", "test"]:
+    rc = regime_counts(ds[sname]["constant"]["pe"])
+    total = sum(rc.values())
+    for regime, cnt in rc.items():
+        rows.append({"split": sname, "regime": regime, "pct": cnt/total*100})
+df = pd.DataFrame(rows)
+for reg in regime_labels:
+    sub = df[df.regime == reg]
+    axes[1].bar(sub.split, sub.pct, label=reg, alpha=0.7)
+axes[1].set_ylabel("% of split")
+axes[1].set_title("Regime proportions per split")
+axes[1].legend()
+axes[1].grid(True, alpha=0.3, axis="y")
+plt.tight_layout()
+plt.show()
+
+# Verify: no sample overlap between splits
+train_ids = set(ds["metadata"]["split_indices"]["train"])
+val_ids   = set(ds["metadata"]["split_indices"]["val"])
+test_ids  = set(ds["metadata"]["split_indices"]["test"])
+print(f"Samples: {len(train_ids)} train / {len(val_ids)} val / {len(test_ids)} test")
+print(f"Overlap train∩val: {len(train_ids & val_ids)}")
+print(f"Overlap train∩test: {len(train_ids & test_ids)}")
+print(f"Overlap val∩test: {len(val_ids & test_ids)}")
+print("→ No leakage" if not (train_ids & val_ids or train_ids & test_ids or val_ids & test_ids) else "→ LEAKAGE DETECTED!")
+
+# Print regime counts per split
+for sname in ["train", "val", "test"]:
+    rc = regime_counts(ds[sname]["constant"]["pe"])
+    total = sum(rc.values())
+    print(f"\n{sname}:")
+    for reg in regime_labels:
+        cnt = rc.get(reg, 0)
+        print(f"  {reg:>6s}: {cnt:5d} ({cnt/total*100:5.1f}%)")
+
+
 # ── Single-forward benchmark ──
 # KANLayer now uses efficient-kan 3D tensor B-spline — no Python loops.
 # Expected on GPU: < 1 ms per single forward, < 5 ms per batch forward.
