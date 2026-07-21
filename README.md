@@ -1,6 +1,6 @@
 # ML_Galerkin_proj
 
-PhD research: **ML-enhanced FE spaces for advection-diffusion-reaction PDEs**.
+Machine Learning Project: **ML-enhanced FE spaces for advection-diffusion-reaction PDEs**.
 Learn KAN-parameterized Residual-Free Bubbles (b̂ = L⁻¹(1), b̃ = L⁻¹(ξ)),
 statically condensed into P1 FEM (mesh‑independent, via Pe, ρ).
 
