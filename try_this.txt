@@ -1,184 +1,54 @@
-# ── VISUALIZE CELL-BASED SPLIT & CHECK COVERAGE ──
-# Cell-based is the most rigorous: entire (Pe, ρ) cells held out → tests
-# true extrapolation to unseen parameter combos, not just interpolation.
-# Use this if you generated with split_strategy="cell".
-#
-# PROBLEM: with few cells (e.g., 9/2/2) and random assignment, some Pe
-# regimes may be entirely missing from val/test.  This cell checks that.
-#
-# FIX: increase n_val_cells / n_test_cells so more regimes are covered,
-# or increase n_samples to populate more cells.
+# ── CONVERGENCE STUDY: Mesh-independence proof ──
+# The learned KAN bubbles map local parameters (Pe, ρ) → bubble shape,
+# so they adapt automatically to any mesh size h.
+# If KAN-RFB has the same slope as Exact RFB on a log-log plot,
+# the enrichment is robust to mesh refinement.
 
-cell_map = ds["metadata"]["cell_map"]
-# Infer Pe bins from cell coordinates (first key is "(pe_idx,rho_idx)")
-pe_bins  = sorted({eval(k)[0] for k in cell_map})
-# Actual Pe bin edges used by _pe_rho_cell (default: 0, 1, 10, 100, 1000, inf)
-# Map pe_idx → regime label
-pe_idx_to_label = ["0-1", "1-10", "10-100", "100-1000", ">1000"]
+from src.convergence import convergence_study, print_table, plot_convergence
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-colors = {"train": "#1F4E79", "val": "#F7DC6F", "test": "#E74C3C"}
+# ── 1. Pick a test case (from held-out test set) ──
+pe_test  = ds["test"]["constant"]["pe"][490]
+rho_test = ds["test"]["constant"]["rho"][490]
+H = 1/16; BETA = 1.0
+EPS = BETA * H / (2 * pe_test)
+SIGMA = rho_test * EPS / H**2
 
-# Left: Pe vs ρ scatter colored by split
-for sname in ["train", "val", "test"]:
-    pe_s = ds[sname]["constant"]["pe"]
-    rho_s = ds[sname]["constant"]["rho"]
-    axes[0].scatter(pe_s, rho_s, c=colors[sname], alpha=0.3, s=8, label=sname, edgecolors='none')
-axes[0].set_xscale("log")
-axes[0].set_xlabel("Pe")
-axes[0].set_ylabel("ρ")
-axes[0].set_title(f"Cell split: {ds['metadata']['n_train']}/{ds['metadata']['n_val']}/{ds['metadata']['n_test']}")
-axes[0].legend()
-axes[0].grid(True, alpha=0.3)
+print(f"Test case: eps={EPS:.4f}, beta={BETA}, sigma={SIGMA:.4f}")
+print(f"  Pe={BETA*H/(2*EPS):.2f}, rho={SIGMA*H**2/EPS:.2f}")
 
-# Right: bar chart — which Pe regimes are covered per split?
-def regime_of_pe(pe):
-    if pe > 1e4: return "inf (>1e4)"
-    if pe > 100: return "high (100–1e4)"
-    if pe > 1:   return "mid (1–100)"
-    if pe > 0.01: return "low (0.01–1)"
-    return "diff. (<0.01)"
+# ── 2. Run convergence study (Classical P1 vs Exact RFB) ──
+# Uses fine FD solve as ground truth, sweeps N = 4, 8, 16, 32, 64
+results = convergence_study(eps=EPS, beta=BETA, sigma=SIGMA,
+                            mesh_sizes=[4, 8, 16, 32, 64])
+print_table(results, title="Classical P1 vs Exact RFB")
 
-rows = []
-for sname in ["train", "val", "test"]:
-    rc = {}
-    for pe in ds[sname]["constant"]["pe"]:
-        r = regime_of_pe(pe)
-        rc[r] = rc.get(r, 0) + 1
-    total = sum(rc.values())
-    for regime, cnt in rc.items():
-        rows.append({"split": sname, "regime": regime, "count": cnt, "pct": cnt/total*100})
+# ── 3. Add trained KAN-RFB to the same study ──
+results_kan = convergence_study(eps=EPS, beta=BETA, sigma=SIGMA,
+                                mesh_sizes=[4, 8, 16, 32, 64],
+                                kan_model=multi_model)
+print_table(results_kan, title="Classical P1 vs Exact RFB vs KAN-RFB")
 
-df = pd.DataFrame(rows)
-regime_order = ["diff. (<0.01)", "low (0.01–1)", "mid (1–100)", "high (100–1e4)", "inf (>1e4)"]
-for reg in regime_order:
-    sub = df[df.regime == reg]
-    if len(sub):
-        axes[1].bar(sub.split, sub.pct, label=reg, alpha=0.7)
-axes[1].set_ylabel("% of split")
-axes[1].set_title("Pe regime coverage per split")
-axes[1].legend(fontsize=8)
-axes[1].grid(True, alpha=0.3, axis="y")
-plt.tight_layout()
-plt.show()
+# ── 4. Plot log-log convergence ──
+plot_convergence(results_kan, labels=["Test case (Pe={:.1f}, rho={:.1f})".format(pe_test, rho_test)])
 
-# Print cell assignment table
-print(f"\n{'Pe regime':<20s} {'Pe_idx':<8s} {'Cell count':<12s} {'Splits':<20s}")
-print("-"*60)
-cell_coords_used = set()
-for c_str, (split, _) in cell_map.items():
-    cell_coords_used.add(c_str)
-pe_regimes_seen = {}
-for c_str, (split, _) in cell_map.items():
-    pe_idx, rho_idx = eval(c_str)  # (pe_idx, rho_idx)
-    label = pe_idx_to_label[pe_idx] if pe_idx < len(pe_idx_to_label) else f">1000"
-    key = (label, pe_idx)
-    if key not in pe_regimes_seen:
-        pe_regimes_seen[key] = {"train": 0, "val": 0, "test": 0}
-    pe_regimes_seen[key][split] += 1
+# ── 5. Multi-case comparison (different regimes) ──
+cases = [
+    (1e-3, 1.0, 0.0,  "Advection-dominated"),
+    (1e-2, 1.0, 0.0,  "Moderate advection"),
+    (1e-3, 1.0, 10.0, "Reaction-dominated"),
+]
+all_results = []
+all_labels  = []
+for eps, beta, sigma, lbl in cases:
+    r = convergence_study(eps=eps, beta=beta, sigma=sigma,
+                          mesh_sizes=[4, 8, 16, 32, 64],
+                          kan_model=multi_model)
+    all_results.append(r)
+    all_labels.append(lbl)
 
-for (label, pe_idx) in sorted(pe_regimes_seen.keys(), key=lambda x: x[1]):
-    cnts = pe_regimes_seen[(label, pe_idx)]
-    total = sum(cnts.values())
-    splits_str = f"{cnts['train']}tr / {cnts['val']}va / {cnts['test']}te"
-    print(f"{label:<20s} {pe_idx:<8d} {total:<12d} {splits_str:<20s}")
-
-# Flag missing regimes
-for sname in ["val", "test"]:
-    seen_regimes = set()
-    for pe in ds[sname]["constant"]["pe"]:
-        seen_regimes.add(regime_of_pe(pe))
-    missing = set(regime_order) - seen_regimes
-    if missing:
-        print(f"  ⚠  {sname} MISSING regimes: {missing}")
-    else:
-        print(f"  ✓  {sname} covers all regimes")
-
-# No-leakage check
-train_ids = set(ds["metadata"]["split_indices"]["train"])
-val_ids   = set(ds["metadata"]["split_indices"]["val"])
-test_ids  = set(ds["metadata"]["split_indices"]["test"])
-print(f"\nSamples: {len(train_ids)} train / {len(val_ids)} val / {len(test_ids)} test")
-print(f"Overlap train∩val: {len(train_ids & val_ids)}")
-print(f"Overlap train∩test: {len(train_ids & test_ids)}")
-print("→ No leakage" if not (train_ids & val_ids or train_ids & test_ids) else "→ LEAKAGE DETECTED!")
-
-
-# ── VISUALIZE STRATIFIED SPLIT & CHECK NO LEAKAGE ──
-# Pe regimes used by the stratified split
-regime_edges = [0.01, 1.0, 100.0, 1e4]
-regime_labels = ["diff.", "low", "mid", "high", "inf"]
-
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-colors = {"train": "#1F4E79", "val": "#F7DC6F", "test": "#E74C3C"}
-
-# Left: Pe vs ρ scatter
-for sname in ["train", "val", "test"]:
-    pe_s = ds[sname]["constant"]["pe"]
-    rho_s = ds[sname]["constant"]["rho"]
-    axes[0].scatter(pe_s, rho_s, c=colors[sname], alpha=0.3, s=8, label=sname, edgecolors='none')
-axes[0].set_xscale("log")
-axes[0].set_xlabel("Pe")
-axes[0].set_ylabel("ρ")
-axes[0].set_title("Stratified split: train / val / test")
-axes[0].legend()
-axes[0].grid(True, alpha=0.3)
-for e in regime_edges:
-    axes[0].axvline(e, color="gray", lw=0.5, ls="--")
-
-# Right: regime proportion bar chart
-def regime_counts(pe_vals):
-    counts = {}
-    for pe in pe_vals:
-        if pe > 1e4:
-            r = "inf"
-        elif pe > 100:
-            r = "high"
-        elif pe > 1:
-            r = "mid"
-        elif pe > 0.01:
-            r = "low"
-        else:
-            r = "diff."
-        counts[r] = counts.get(r, 0) + 1
-    return counts
-
-import pandas as pd
-rows = []
-for sname in ["train", "val", "test"]:
-    rc = regime_counts(ds[sname]["constant"]["pe"])
-    total = sum(rc.values())
-    for regime, cnt in rc.items():
-        rows.append({"split": sname, "regime": regime, "pct": cnt/total*100})
-df = pd.DataFrame(rows)
-for reg in regime_labels:
-    sub = df[df.regime == reg]
-    axes[1].bar(sub.split, sub.pct, label=reg, alpha=0.7)
-axes[1].set_ylabel("% of split")
-axes[1].set_title("Regime proportions per split")
-axes[1].legend()
-axes[1].grid(True, alpha=0.3, axis="y")
-plt.tight_layout()
-plt.show()
-
-# Verify: no sample overlap between splits
-train_ids = set(ds["metadata"]["split_indices"]["train"])
-val_ids   = set(ds["metadata"]["split_indices"]["val"])
-test_ids  = set(ds["metadata"]["split_indices"]["test"])
-print(f"Samples: {len(train_ids)} train / {len(val_ids)} val / {len(test_ids)} test")
-print(f"Overlap train∩val: {len(train_ids & val_ids)}")
-print(f"Overlap train∩test: {len(train_ids & test_ids)}")
-print(f"Overlap val∩test: {len(val_ids & test_ids)}")
-print("→ No leakage" if not (train_ids & val_ids or train_ids & test_ids or val_ids & test_ids) else "→ LEAKAGE DETECTED!")
-
-# Print regime counts per split
-for sname in ["train", "val", "test"]:
-    rc = regime_counts(ds[sname]["constant"]["pe"])
-    total = sum(rc.values())
-    print(f"\n{sname}:")
-    for reg in regime_labels:
-        cnt = rc.get(reg, 0)
-        print(f"  {reg:>6s}: {cnt:5d} ({cnt/total*100:5.1f}%)")
+plot_convergence(all_results, labels=all_labels,
+                 save_path="convergence_multi.png")
+print_table(all_results[0], title=all_labels[0])
 
 
 # ── Single-forward benchmark ──
@@ -218,7 +88,7 @@ for _ in range(20): model(xi_b, pe_b, rho_b)
 if device.type == "cuda": torch.cuda.synchronize()
 t1 = time.time()
 fwd_time = (t1-t0)/20
-print(f"Batch forward (256×100 pts): {fwd_time*1000:.1f} ms  |  {fwd_time:.4f} s")
+print(f"Batch forward (256x100 pts): {fwd_time*1000:.1f} ms  |  {fwd_time:.4f} s")
 
 # fwd+bwd
 opt = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -232,7 +102,6 @@ for _ in range(10):
     if device.type == "cuda": torch.cuda.synchronize()
 t1 = time.time()
 step_time = (t1-t0)/10
-print(f"Batch step (fwd+bwd+opt, 256×100): {step_time*1000:.1f} ms  |  {step_time:.4f} s")
-print(f"Estimated for 700 epochs × 4 batches/epoch: {700*4*step_time/60:.0f} min")
-# Expected on GPU: step < 20 ms → ~1 min total
-
+print(f"Batch step (fwd+bwd+opt, 256x100): {step_time*1000:.1f} ms  |  {step_time:.4f} s")
+print(f"Estimated for 700 epochs x 4 batches/epoch: {700*4*step_time/60:.0f} min")
+# Expected on GPU: step < 20 ms -> ~1 min total
