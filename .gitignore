@@ -4,6 +4,8 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 
+data.py
+
 # OS
 .DS_Store
 *.tar.gz
