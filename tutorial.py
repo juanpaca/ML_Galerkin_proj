@@ -475,8 +475,7 @@ for corner_name, ci in corner_idx.items():
     pe_t = torch.full_like(xi_t, pe_val)
     rho_t = torch.full_like(xi_t, rho_val)
 
-    with torch.no_grad():
-        kan_pred = multi_model.value_grad_numpy(xi_plot, pe_val, rho_val)
+    kan_pred = multi_model.value_grad_numpy(xi_plot, pe_val, rho_val)
 
     exact = ExactRFBubbleSet1D(eps_val, BETA, sigma_val, H,
                                 residual_modes=("constant", "xi"), n_points=4000)
