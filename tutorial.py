@@ -485,4 +485,70 @@ for corner_name, ci in corner_idx.items():
         mse_kan = np.mean((kan_pred[mode_i] - exact_pred[mode_i])**2)
         print(f"  {corner_name:20s} | {mode_name:12s} | MSE(KAN vs Exact) = {mse_kan:.4e}")
 
+# ── 9. PLOT SOLUTIONS AT EACH CORNER ────────────────────────────────────
+fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True, sharey=True)
+x_p = np.linspace(0, 1, 300)
+N_EL = 16
+
+for ax, (corner_name, ci) in zip(axes.flat, corner_idx.items()):
+    pe_val = test_data_const["pe"][ci]
+    rho_val = test_data_const["rho"][ci]
+    EPS = BETA * H / (2 * pe_val)
+    SIGMA = rho_val * EPS / H**2
+
+    mesh = Mesh1D(0.0, 1.0, N_EL)
+    quad = GaussLegendre(16)
+    pde = AdvectionDiffusion1D(EPS, BETA, SIGMA)
+    pde.set_source_from_function(lambda x: np.ones_like(x))
+
+    # Fine FD reference
+    N_FD = 8000
+    dx_ref = 1.0 / (N_FD - 1)
+    x_ref = np.linspace(0, 1, N_FD)
+    A_ref = np.zeros((N_FD, N_FD))
+    rhs_ref = np.ones(N_FD)
+    for j in range(1, N_FD - 1):
+        A_ref[j, j-1] = -EPS/dx_ref**2 - BETA/(2*dx_ref)
+        A_ref[j, j]   =  2*EPS/dx_ref**2 + SIGMA
+        A_ref[j, j+1] = -EPS/dx_ref**2 + BETA/(2*dx_ref)
+    A_ref[0,0] = A_ref[-1,-1] = 1.0
+    rhs_ref[0] = rhs_ref[-1] = 0.0
+    u_ref = np.linalg.solve(A_ref, rhs_ref)
+
+    # Classical P1
+    A_cl, F_cl = assemble_classical_system(mesh, quad, pde)
+    u_cl = np.linalg.solve(A_cl, F_cl)
+
+    class ClassicalSol:
+        def __init__(self, m, u): self.mesh = m; self.u = u
+        def __call__(self, x):
+            b = LagrangeBasis1D(self.mesh)
+            return sum(self.u[i] * b.eval(x, i) for i in range(self.mesh.n_nodes))
+
+    # Exact RFB
+    exact_set = ExactRFBubbleSet1D(EPS, BETA, SIGMA, mesh.h,
+                                    residual_modes=("constant", "xi"), n_points=8000)
+    A_ex, F_ex, local_ex = assemble_rfb_condensed_system(mesh, quad, pde, exact_set)
+    u_ex = np.linalg.solve(A_ex, F_ex)
+    ub_ex = recover_bubble_coefficients(u_ex, mesh, local_ex)
+    sol_ex = RFBSolution1D(u_ex, ub_ex, mesh, exact_set, pde)
+
+    # KAN-RFB
+    A_kan, F_kan, local_kan = assemble_rfb_condensed_system(mesh, quad, pde, multi_model)
+    u_kan = np.linalg.solve(A_kan, F_kan)
+    ub_kan = recover_bubble_coefficients(u_kan, mesh, local_kan)
+    sol_kan = RFBSolution1D(u_kan, ub_kan, mesh, multi_model, pde)
+
+    ax.plot(x_ref, np.interp(x_p, x_ref, u_ref), 'k-', lw=1.5, label='Exact FD')
+    ax.plot(x_p, ClassicalSol(mesh, u_cl)(x_p), '--', label='Classical P1')
+    ax.plot(x_p, sol_ex(x_p), ':', lw=2, label='Exact RFB')
+    ax.plot(x_p, sol_kan(x_p), '-.', lw=2, label='KAN-RFB')
+    ax.set_title(f"{corner_name}\nPe={pe_val:.1f}, ρ={rho_val:.1f}", fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+axes[0, 0].legend(fontsize=8)
+fig.supxlabel('x')
+fig.sup_ylabel('u(x)')
+fig.suptitle("PDE solutions at frame corners (never trained on these regimes)", fontsize=12, y=1.01)
+fig.tight_layout()
 plt.show()
