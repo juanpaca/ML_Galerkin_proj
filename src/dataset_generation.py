@@ -209,6 +209,54 @@ def sample_parameters_grid(
     return np.column_stack([EE.ravel(), BB.ravel(), SS.ravel()])
 
 
+def sample_parameters_log_pe_rho(
+    pe_range: tuple[float, float] = (0.3, 312.0),
+    rho_range: tuple[float, float] = (0.01, 380.0),
+    n_samples: int = 5000,
+    h: float = 1 / 16,
+    beta: float = 1.0,
+    seed: int | None = None,
+) -> np.ndarray:
+    """Sample uniformly in log(Pe) x log(rho) space, back-compute (eps, sigma).
+
+    Given fixed h and beta, the mapping is:
+        eps = beta * h / (2 * Pe)
+        sigma = rho * eps / h**2 = rho * beta / (2 * Pe * h)
+
+    Parameters
+    ----------
+    pe_range : (Pe_min, Pe_max)
+        Péclet number range (both > 0).
+    rho_range : (rho_min, rho_max)
+        Reaction number range (both > 0).
+    n_samples : int
+        Number of samples.
+    h : float
+        Element length.
+    beta : float
+        Advection coefficient.
+    seed : int or None
+        Random seed.
+
+    Returns
+    -------
+    ndarray of shape (n_samples, 3) : (eps, beta, sigma) columns,
+        compatible with the existing FD solve pipeline.
+    """
+    rng = _rng(seed)
+
+    log_pe = rng.uniform(np.log10(pe_range[0]), np.log10(pe_range[1]), n_samples)
+    log_rho = rng.uniform(np.log10(rho_range[0]), np.log10(rho_range[1]), n_samples)
+
+    pe = 10.0 ** log_pe
+    rho = 10.0 ** log_rho
+
+    eps = beta * h / (2.0 * pe)
+    sigma = rho * eps / (h ** 2)
+
+    return np.column_stack([eps, np.full(n_samples, beta), sigma])
+
+
 # ---------------------------------------------------------------------------
 # Variable ε profile families
 # ---------------------------------------------------------------------------
@@ -605,6 +653,86 @@ def regime_holdout_split(
     return train_idx, test_idx
 
 
+def frame_split(
+    pe_values: np.ndarray,
+    rho_values: np.ndarray,
+    d_prime_fraction: float = 0.7,
+    val_fraction: float = 0.2,
+    seed: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Geometric frame split in log(Pe) x log(rho) space.
+
+    Defines a bounding box D in log-space covering all samples.
+    D' is a centered subrectangle of width ``d_prime_fraction`` of D
+    along each axis.  Samples inside D' are split  (1 - val_fraction) /
+    val_fraction  into train / val.  Samples outside D' (the frame
+    T = D \\ D') become the test set.
+
+    This ensures the test set covers 4 corner regimes where the model
+    has never seen extreme Pe or extreme rho during training, providing
+    a rigorous extrapolation test.
+
+    Parameters
+    ----------
+    pe_values, rho_values : ndarray
+        Parameter values for each sample (must be > 0).
+    d_prime_fraction : float
+        Width of D' as a fraction of D along each axis (0, 1].
+        0.7 means D' covers 70% of each axis, frame is 15% margin.
+    val_fraction : float
+        Fraction of D' samples used for validation.
+    seed : int or None
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    train_idx, val_idx, test_idx : ndarray
+        Indices into the original dataset.
+    frame_metadata : dict
+        Contains D' bounds, margin fractions, and per-sample classification.
+    """
+    rng = _rng(seed)
+
+    log_pe = np.log10(np.clip(pe_values, 1e-15, None))
+    log_rho = np.log10(np.clip(rho_values, 1e-15, None))
+
+    log_pe_min, log_pe_max = float(log_pe.min()), float(log_pe.max())
+    log_rho_min, log_rho_max = float(log_rho.min()), float(log_rho.max())
+
+    margin = (1.0 - d_prime_fraction) / 2.0
+
+    d_prime_pe_lo = log_pe_min + margin * (log_pe_max - log_pe_min)
+    d_prime_pe_hi = log_pe_max - margin * (log_pe_max - log_pe_min)
+    d_prime_rho_lo = log_rho_min + margin * (log_rho_max - log_rho_min)
+    d_prime_rho_hi = log_rho_max - margin * (log_rho_max - log_rho_min)
+
+    inside = (
+        (log_pe >= d_prime_pe_lo) & (log_pe <= d_prime_pe_hi) &
+        (log_rho >= d_prime_rho_lo) & (log_rho <= d_prime_rho_hi)
+    )
+    inside_idx = np.where(inside)[0]
+    frame_idx = np.where(~inside)[0]
+
+    rng.shuffle(inside_idx)
+    n_val = max(1, int(round(val_fraction * len(inside_idx))))
+    n_val = min(n_val, len(inside_idx) - 1)
+    val_idx = inside_idx[:n_val]
+    train_idx = inside_idx[n_val:]
+
+    frame_metadata = {
+        "d_prime_fraction": d_prime_fraction,
+        "val_fraction": val_fraction,
+        "log_pe_range": [log_pe_min, log_pe_max],
+        "log_rho_range": [log_rho_min, log_rho_max],
+        "d_prime_pe_bounds": [d_prime_pe_lo, d_prime_pe_hi],
+        "d_prime_rho_bounds": [d_prime_rho_lo, d_prime_rho_hi],
+        "n_inside": int(len(inside_idx)),
+        "n_frame": int(len(frame_idx)),
+    }
+
+    return np.array(train_idx), np.array(val_idx), np.array(frame_idx), frame_metadata
+
+
 # ---------------------------------------------------------------------------
 # Main generation entry point
 # ---------------------------------------------------------------------------
@@ -674,19 +802,23 @@ class DatasetConfig:
     eps_range: tuple[float, float] = (1e-6, 1.0)
     beta_range: tuple[float, float] = (1.0, 1.0)
     sigma_range: tuple[float, float] = (0.0, 0.0)
-    strategy: Literal["lhs", "stratified", "grid"] = "lhs"
+    strategy: Literal["lhs", "stratified", "grid", "log_pe_rho"] = "lhs"
     n_stratified_decade_weights: list[float] | None = None
+    pe_range: tuple[float, float] = (0.3, 312.0)
+    rho_range: tuple[float, float] = (0.01, 380.0)
     variable_eps_fraction: float = 0.0
     variable_eps_profile: str = "sinusoidal"
     variable_eps_n_quad: int = 5
     n_fd_points: int = 400
     val_split: float = 0.15
     test_split: float = 0.15
-    split_strategy: Literal["stratified", "cell", "random"] = "cell"
+    split_strategy: Literal["stratified", "cell", "random", "frame"] = "cell"
     n_val_cells: int = 3
     n_test_cells: int = 3
     pe_bins: tuple[float, ...] | None = None
     rho_bins: tuple[float, ...] | None = None
+    frame_d_prime_fraction: float = 0.7
+    frame_val_fraction: float = 0.2
     holdout_regime: str | None = None
     standardize: bool = True
     seed: int = 42
@@ -778,6 +910,15 @@ def generate_dataset(
         )
     elif config.strategy == "grid":
         all_params = sample_parameters_grid(space)
+    elif config.strategy == "log_pe_rho":
+        all_params = sample_parameters_log_pe_rho(
+            pe_range=config.pe_range,
+            rho_range=config.rho_range,
+            n_samples=config.n_samples,
+            h=config.h,
+            beta=config.beta_range[0],
+            seed=config.seed,
+        )
     else:
         raise ValueError(f"Unknown strategy: {config.strategy}")
 
@@ -846,11 +987,20 @@ def generate_dataset(
 
     # ---- 4. Split ----
     cell_map = None
+    frame_meta = None
     if config.holdout_regime is not None:
         train_idx, test_idx = regime_holdout_split(
             pe_all, holdout_regime=config.holdout_regime, seed=config.seed + 2
         )
         val_idx = np.array([], dtype=int)
+    elif config.split_strategy == "frame":
+        rho_all = arrays_by_mode["constant"]["rho"]
+        train_idx, val_idx, test_idx, frame_meta = frame_split(
+            pe_all, rho_all,
+            d_prime_fraction=config.frame_d_prime_fraction,
+            val_fraction=config.frame_val_fraction,
+            seed=config.seed + 2,
+        )
     elif config.split_strategy == "cell":
         rho_all = arrays_by_mode["constant"]["rho"]
         train_idx, val_idx, test_idx, cell_map = cell_based_split(
@@ -933,6 +1083,8 @@ def generate_dataset(
             f"({pe},{rh})": (split, idxs.tolist())
             for (pe, rh), (split, idxs) in cell_map.items()
         }
+    if frame_meta is not None:
+        metadata["frame_meta"] = frame_meta
     if config.holdout_regime is not None:
         metadata["split_strategy"] = f"holdout_{config.holdout_regime}"
     dataset["metadata"] = metadata
