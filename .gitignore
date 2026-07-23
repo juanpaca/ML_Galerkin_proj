@@ -5,6 +5,12 @@ venv/
 .ipynb_checkpoints/
 
 data.py
+try_this.txt
+tutorial.ipynb
+train_1k.py
+train_xi.py
+convergence_study.py
+convergence_study.png
 
 # Datasets (too large for git — upload to Google Drive instead)
 datasets/*.npz
@@ -13,6 +19,9 @@ datasets/*.json
 # OS
 .DS_Store
 *.tar.gz
+
+# Trained models (large, not for version control)
+models/*.pt
 
 # Auxiliary project files (not needed for running)
 report_project/
