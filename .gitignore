@@ -6,6 +6,10 @@ venv/
 
 data.py
 
+# Datasets (too large for git — upload to Google Drive instead)
+datasets/*.npz
+datasets/*.json
+
 # OS
 .DS_Store
 *.tar.gz

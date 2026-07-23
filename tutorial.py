@@ -29,9 +29,13 @@ if not os.path.isdir('/content/ML_Galerkin_proj'):
 # %cd /content/ML_Galerkin_proj
 !git pull
 
-print("GPU:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("Device:", torch.cuda.get_device_name(0))
+# Mount Google Drive and symlink datasets (too large for git)
+from google.colab import drive
+drive.mount('/content/drive')
+# Upload your datasets/ folder to Google Drive/ML_Galerkin_proj/datasets/ first
+!rm -rf /content/ML_Galerkin_proj/datasets
+!ln -s "/content/drive/MyDrive/ML_Galerkin_proj/datasets" /content/ML_Galerkin_proj/datasets
+print("Datasets loaded from Google Drive")
 
 # ── 1. IMPORTS ──────────────────────────────────────────────────────────
 import sys, os
