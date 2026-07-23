@@ -539,7 +539,7 @@ for ax, (corner_name, ci) in zip(axes.flat, corner_idx.items()):
     ub_kan = recover_bubble_coefficients(u_kan, mesh, local_kan)
     sol_kan = RFBSolution1D(u_kan, ub_kan, mesh, multi_model, pde)
 
-    ax.plot(x_ref, np.interp(x_p, x_ref, u_ref), 'k-', lw=1.5, label='Exact FD')
+    ax.plot(x_p, np.interp(x_p, x_ref, u_ref), 'k-', lw=1.5, label='Exact FD')
     ax.plot(x_p, ClassicalSol(mesh, u_cl)(x_p), '--', label='Classical P1')
     ax.plot(x_p, sol_ex(x_p), ':', lw=2, label='Exact RFB')
     ax.plot(x_p, sol_kan(x_p), '-.', lw=2, label='KAN-RFB')
