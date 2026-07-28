@@ -217,18 +217,18 @@ def sample_parameters_log_pe_rho(
     beta: float = 1.0,
     seed: int | None = None,
 ) -> np.ndarray:
-    """Sample uniformly in log(Pe) x log(rho) space, back-compute (eps, sigma).
+    """Sample uniformly in log(eps) x log(sigma) space, derive (Pe, rho).
 
     Given fixed h and beta, the mapping is:
-        eps = beta * h / (2 * Pe)
-        sigma = rho * eps / h**2 = rho * beta / (2 * Pe * h)
+        Pe = beta * h / (2 * eps)
+        rho = sigma * eps / h**2
 
     Parameters
     ----------
     pe_range : (Pe_min, Pe_max)
-        Péclet number range (both > 0).
+        Péclet number range (both > 0).  Used for reference only.
     rho_range : (rho_min, rho_max)
-        Reaction number range (both > 0).
+        Reaction number range (both > 0).  Used for reference only.
     n_samples : int
         Number of samples.
     h : float
