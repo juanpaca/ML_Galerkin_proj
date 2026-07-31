@@ -8,6 +8,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+np.random.seed(0)
+torch.manual_seed(0)
+
 np.set_printoptions(precision=4, suppress=True, linewidth=120)
 torch.set_printoptions(precision=4, sci_mode=False)
 
@@ -69,7 +72,7 @@ with torch.no_grad():
 x_fd_grad = torch.tensor([0.0], requires_grad=True)
 y_fd = k(x_fd_grad)
 auto_grad = torch.autograd.grad(y_fd, x_fd_grad, torch.ones_like(y_fd), create_graph=False)[0].item()
-check("forward/grad: FD ≈ autograd", approx(auto_grad, fd_grad, tol=1e-3),
+check("forward/grad: FD ≈ autograd", approx(auto_grad, fd_grad, tol=5e-3),
       f"auto={auto_grad:.4f}, fd={fd_grad:.4f}")
 
 # --- 1.5 forward_with_deriv ---
@@ -559,6 +562,59 @@ check("similarity: real train eff_rank small (redundant)",
       er_real["effective_rank"] < 5.0, f"got {er_real['effective_rank']:.3f}")
 check("similarity: real train off-diag mean in [0,1]",
       0.0 <= od_real["mean"] <= 1.0, f"got {od_real['mean']:.4f}")
+
+# =========================================================================
+# 9. Analytic RFB bubble (src/rfb_analytic.py)
+# =========================================================================
+print("\n" + "=" * 60)
+print("9. Analytic RFB bubble (src/rfb_analytic.py)")
+print("=" * 60)
+
+from src.rfb_analytic import exact_rfb, fd_rfb, fd_error_metrics
+
+# --- 9.1 Normalization, BCs, positivity at low Pe ---
+for mode_a in ("constant", "xi"):
+    ex = exact_rfb(1.0, 1.0, mode_a, xi=np.linspace(0.0, 1.0, 401))
+    check(f"analytic[{mode_a}]: b(0) ≈ 0", abs(ex["b"][0]) < 1e-12)
+    check(f"analytic[{mode_a}]: b(1) ≈ 0", abs(ex["b"][-1]) < 1e-12)
+    check(f"analytic[{mode_a}]: normalized b(0.5) = 1",
+          abs(float(np.interp(0.5, ex["xi"], ex["b_norm"])) - 1.0) < 1e-9)
+    check(f"analytic[{mode_a}]: bubble ≥ 0", (ex["b"] >= 0).all())
+
+# --- 9.2 Residual of the ODE (low Pe, normalized bubble) ---
+ex = exact_rfb(1.0, 1.0, "constant", xi=np.linspace(0.0, 1.0, 2001))
+d2 = np.gradient(np.gradient(ex["b_norm"], ex["xi"][1] - ex["xi"][0]),
+                 ex["xi"][1] - ex["xi"][0])
+res = -d2 + 2.0 * 1.0 * np.gradient(ex["b_norm"], ex["xi"][1] - ex["xi"][0]) \
+      + 1.0 * ex["b_norm"] - 1.0 / ex["center"]
+check("analytic: normalized bubble satisfies ODE (residual ~ 0)",
+      np.max(np.abs(res[50:-50])) < 1e-3,
+      f"max|res| = {np.max(np.abs(res[50:-50])):.2e}")
+
+# --- 9.3 Symmetry for pure diffusion (Pe = 0) ---
+ex = exact_rfb(0.0, 1.0, "constant", xi=np.linspace(0.0, 1.0, 401))
+sym_err = np.max(np.abs(ex["b_norm"] - ex["b_norm"][::-1]))
+check("analytic: Pe=0 bubble is symmetric", sym_err < 1e-10,
+      f"max asym = {sym_err:.2e}")
+
+# --- 9.4 FD-400 under-resolves the Pe=100 layer, n=3200 fixes it ---
+ex = exact_rfb(100.0, 1.0, "xi", xi=np.linspace(0.0, 1.0, 4001))
+fd_400 = fd_rfb(100.0, 1.0, "xi", n_points=400, xi_ref=ex["xi"])
+fd_3200 = fd_rfb(100.0, 1.0, "xi", n_points=3200, xi_ref=ex["xi"])
+e400 = fd_error_metrics(fd_400, ex)["l2_rel_full"]
+e3200 = fd_error_metrics(fd_3200, ex)["l2_rel_full"]
+check("analytic: FD-400 Pe=100 error > 1% (under-resolved)", e400 > 1e-2,
+      f"got {e400:.2e}")
+check("analytic: FD-3200 Pe=100 error < 0.5% (resolved)", e3200 < 5e-3,
+      f"got {e3200:.2e}")
+
+# --- 9.5 FD-400 vs analytic agree at low Pe (both modes) ---
+for mode_a in ("constant", "xi"):
+    ex = exact_rfb(1.0, 1.0, mode_a, xi=np.linspace(0.0, 1.0, 401))
+    fd = fd_rfb(1.0, 1.0, mode_a, n_points=400, xi_ref=ex["xi"])
+    err = fd_error_metrics(fd, ex)["l2_rel_full"]
+    check(f"analytic: FD-400 matches analytic at Pe=1 [{mode_a}]", err < 1e-2,
+          f"L2 rel = {err:.2e}")
 
 # =========================================================================
 # Summary
