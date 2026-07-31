@@ -1,14 +1,11 @@
 # ML_Galerkin_proj
 
-Machine Learning Project: **ML-enhanced FE spaces for advection-diffusion-reaction PDEs**.
-
-Learn KAN-parameterized Residual-Free Bubbles (b̂ = L⁻¹(1), b̃ = L⁻¹(ξ)),
-statically condensed into P1 FEM — mesh-independent, parameterized by Péclet and
-reaction numbers (Pe, ρ).
+ML-enhanced FE spaces for advection-diffusion-reaction PDEs. Learn
+KAN-parameterized Residual-Free Bubbles (b̂ = L⁻¹(1), b̃ = L⁻¹(ξ)) and use them
+as enrichment functions in P1 FEM, parameterized by Péclet and reaction numbers
+(Pe, ρ).
 
 ## Problem
-
-The advection-diffusion-reaction equation:
 
 ```
 -ε u'' + β u' + σ u = f    on [0,1],   u(0) = u(1) = 0
@@ -16,11 +13,8 @@ The advection-diffusion-reaction equation:
 
 with `Pe = βh/(2ε)` (advection dominance) and `ρ = σh²/ε` (reaction dominance).
 When Pe >> 1 or ρ >> 1, standard P1 FEM suffers spurious oscillations.
-
-**Residual-Free Bubbles (RFB)** add per-element enrichment functions that
-exactly capture sub-element behavior, eliminating oscillations without mesh
-refinement. We parameterize these bubbles with KANs so they generalize across
-the (Pe, ρ) parameter space.
+Residual-Free Bubbles (RFB) add per-element enrichment functions that capture
+sub-element behavior, eliminating oscillations without mesh refinement.
 
 ## Setup
 
@@ -33,111 +27,51 @@ pip install torch numpy scipy matplotlib
 ## Quick start
 
 ```python
-# 1. Generate a frame-split dataset (log-uniform in Pe×ρ)
-from src.dataset_generation import generate_dataset, save_dataset
-dataset = generate_dataset(
-    n_samples=5000,
-    sampling="log_pe_rho",
-    split_strategy="frame",
-)
+# 1. Load the pre-generated frame-split dataset
+from src.dataset_generation import load_dataset, dataset_summary
+ds = load_dataset("rfb_5k_frame")     # 5000 samples: 3544/499/957 (train/val/test)
+dataset_summary(ds)
 
-# 2. Train both bubbles
-from src.dataset_generation import train_multi_bubble_on_dataset
-from src.rfb_bubble import MultiKANBubble1D
+# 2. Check bubble redundancy / train-test leakage in function space
+from src.dataset_generation import bubble_similarity_analysis
+bubble_similarity_analysis(ds, mode="constant")
+
+# 3. Train both bubbles (value-only loss)
 import torch
+from src.rfb_bubble import MultiKANBubble1D
+from src.dataset_generation import train_multi_bubble_on_dataset
 
-model = MultiKANBubble1D(n_bubbles=2, n_hidden=5).to("cuda")
+model = MultiKANBubble1D(n_bubbles=2, n_hidden=10, n_grid=8, spline_order=3)
 histories = train_multi_bubble_on_dataset(
-    model, dataset["train"], n_epochs=700, batch_size=256,
-    device=torch.device("cuda"),
+    model, ds["train"], mode_names=("constant", "xi"),
+    n_epochs=700, batch_size=256, lr=1e-3, grad_weight=0.0, n_quad=80,
+    device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
 )
 ```
 
-## Dataset generation
+## Dataset
 
-### Frame split (recommended)
+### Existing dataset
 
-The frame split divides the parameter domain D = log(Pe) × log(ρ) into a
-**training core D'** (centered 90% subrectangle) and a **test frame D\D'**
-(corners with unseen extreme Pe/ρ combinations). This evaluates genuine
-out-of-distribution generalization.
+`datasets/rfb_5k_frame_*` — the only dataset present (not tracked in git;
+load it from Google Drive in Colab). Frame split, log-uniform in Pe × ρ:
 
-```
-┌──────────────────────────┐
-│ T          T          T  │  T = test (corners)
-│                            │
-│     D' (train + val)      │
-│                            │
-│ T          T          T  │  D' = centered 90% subrectangle
-└──────────────────────────┘
-```
+| | log Pe | log ρ |
+|---|---|---|
+| D′ (train + val) | centered 90% | centered 90% |
+| D\D′ (test) | frame/corners | frame/corners |
 
-```python
-from src.dataset_generation import generate_dataset, save_dataset, frame_split
-
-dataset = generate_dataset(
-    n_samples=5000,
-    strategy="lhs",
-    split_strategy="frame",       # geometric corner split
-    frame_d_prime_fraction=0.90,  # D' covers central 90% in each axis
-    frame_val_fraction=500/4050,  # fraction of D' held out for validation
-    sigma_range=(0.0, 10000.0),
-)
-
-# D' = train+val (inner 90%),  D\D' = test (corners)
-print(f"Train: {len(dataset['train']['pe'])} | "
-      f"Val: {len(dataset['val']['pe'])} | "
-      f"Test: {len(dataset['test']['pe'])}")
-```
-
-### Log-Pe, log-ρ sampling (recommended)
-
-Samples uniformly in log(Pe) × log(ρ) space, then back-computes (ε, σ).
-Avoids diagonal-band bias from naive (ε, σ) LHS sampling:
-
-```python
-dataset = generate_dataset(
-    n_samples=5000,
-    sampling="log_pe_rho",  # uniform in log(Pe)×log(ρ)
-    sigma_range=(0.0, 10000.0),
-)
-```
-
-### `generate_dataset()` — full API
-
-```python
-from src.dataset_generation import generate_dataset, DatasetConfig, save_dataset, load_dataset
-
-# Option A: keyword overrides
-dataset = generate_dataset(
-    n_samples=5000,
-    eps_range=(1e-6, 1.0),
-    beta_range=(1.0, 1.0),
-    sigma_range=(0.0, 10000.0),
-    h=1/16,
-    strategy="lhs",           # "lhs" | "stratified" | "grid"
-    split_strategy="frame",   # "frame" | "cell" | "stratified" | "random"
-    n_fd_points=400,
-    seed=42,
-)
-
-# Option B: DatasetConfig
-config = DatasetConfig(n_samples=5000, split_strategy="frame", sigma_range=(0.0, 10000.0))
-dataset = generate_dataset(config)
-
-# Save/load
-path = save_dataset(dataset, name="rfb_5k_frame")
-dataset = load_dataset("rfb_5k_frame")
-```
+- 5000 samples, FD reference on 400 points, `n_fd_points=400`.
+- Pe ∈ [0.31, 100], ρ ∈ [0.26, 100] (h = 1/16, β = 1).
 
 ### Dataset structure
 
 ```python
-dataset["train"]["constant"]   # b̂ = L⁻¹(1) mode
-dataset["train"]["xi"]         # b̃ = L⁻¹(ξ) mode
-dataset["val"]                 # same shape, held-out cells
-dataset["test"]                # same shape, frame corners
-dataset["metadata"]            # full config + split indices + cell map
+ds["train"]["constant"]   # b̂ = L⁻¹(1) mode
+ds["train"]["xi"]         # b̃ = L⁻¹(ξ) mode
+ds["val"]                 # same shape
+ds["test"]                # frame corners
+ds["metadata"]            # config + split_indices + frame_meta
 ```
 
 Each mode dict contains:
@@ -150,45 +84,50 @@ Each mode dict contains:
 | `db` | `(N, n_fd)` | Derivative d b/dξ |
 | `xi` | `(n_fd,)` | FD grid points in [0, 1] |
 
-### Split strategies
+### Generating a new dataset
 
 ```python
-# Frame (recommended): geometric split in log(Pe)×log(ρ) space
-# D' = centered 90% subrectangle (train+val), D\D' = corners (test)
-split_strategy="frame"
+from src.dataset_generation import generate_dataset, save_dataset, load_dataset
 
-# Cell-based: entire (Pe decade, ρ range) cells held out — no leakage
-split_strategy="cell"
-
-# Stratified: preserve Pe regime proportions
-split_strategy="stratified"
-
-# Random: simple random shuffle
-split_strategy="random"
+dataset = generate_dataset(
+    n_samples=5000,
+    strategy="log_pe_rho",         # uniform in log(Pe) × log(ρ)
+    pe_range=(0.3, 100.0),
+    rho_range=(0.2, 100.0),
+    split_strategy="frame",        # frame | stratified | cell | random
+    frame_d_prime_fraction=0.90,
+    n_fd_points=400,
+    seed=42,
+)
+path = save_dataset(dataset, name="my_dataset")
+dataset = load_dataset("my_dataset")
 ```
 
-### Sampling strategies
+`generate_dataset(config=None, **overrides)` accepts a `DatasetConfig` or keyword
+overrides. Sampling strategies: `"lhs"`, `"stratified"`, `"grid"`,
+`"log_pe_rho"`. Split strategies: `"frame"`, `"cell"`, `"stratified"`,
+`"random"`.
+
+## Bubble redundancy / leakage analysis
+
+The dataset is normalized so every bubble has b(0.5) = 1. `bubble_similarity_analysis`
+computes the L2 cosine similarity `C[i,j] = ⟨b_i,b_j⟩/(‖b_i‖‖b_j‖)` within each
+split, the spectral effective rank (how many genuinely distinct bubble shapes the
+split spans), and, for every val/test bubble, its maximum similarity to any train
+bubble (function-space leakage).
 
 ```python
-# Log-uniform in Pe×ρ (recommended)
-strategy="lhs"  # with sampling="log_pe_rho" in generate_dataset()
-
-# LHS — uniform coverage of parameter hypercube
-strategy="lhs"
-
-# Stratified — control per-decade allocation
-strategy="stratified"
-n_stratified_decade_weights=[0.4, 0.3, 0.2, 0.1, 0.0, 0.0]
-
-# Grid — full factorial
-strategy="grid"
+res = bubble_similarity_analysis(ds, mode="constant")   # or mode="xi"
+res["within"]["train"]["effective_rank"]
+res["cross"]["train_vs_test"]["stats"]["frac_gt_0.99"]
 ```
 
----
+On `rfb_5k_frame` the bubbles turn out to be heavily redundant (effective rank
+≈ 1.2, mean similarity ≈ 0.95) and 100% of test bubbles have a train twin with
+similarity > 0.99: the frame test set is effectively in-distribution in function
+space, even though its (Pe, ρ) lie outside D′.
 
 ## Model architecture
-
-### KAN Bubble (single mode)
 
 ```
 Input: (Pe_s, ρ_s, ξ_s)          each scaled to [-1, 1]
@@ -204,253 +143,143 @@ softplus(raw) + delta              positivity
 Output: b(ξ) ∈ [0, 1],            b(0)=b(1)=0, b(0.5)=1
 ```
 
-### KAN edge function
-
-Each edge computes:
+Each KAN edge function is a B-spline network
 
 ```
 φ(x) = w_b · SiLU(x) + w_s · Σ_i c_i · B_i^k(x)
 ```
 
-where `B_i^k` are quadratic B-splines (G=8 intervals, k=3) on [-1, 1].
-Nodes sum their incoming edges — no activation between layers.
+with quadratic B-splines (G = 8 intervals, k = 3) on [-1, 1]. Nodes sum their
+incoming edges — no activation between layers.
 
 ### Model evaluation
 
 ```python
-# Single (pe, rho) pair, many ξ points
 xi = torch.linspace(0, 1, 101)
-b = model(xi, pe=torch.tensor(100.0), rho=torch.tensor(0.0))
-
-# Batched: multiple (pe, rho) pairs
-bs = 16
-xi_flat = xi.unsqueeze(0).expand(bs, -1).reshape(-1)
-pe_flat = pe_batch.unsqueeze(1).expand(-1, 101).reshape(-1)
-rho_flat = rho_batch.unsqueeze(1).expand(-1, 101).reshape(-1)
-b_flat = model(xi_flat, pe_flat, rho_flat)
-b_reshaped = b_flat.reshape(bs, 101)
-
-# With precomputed norm_factor (avoids redundant KAN pass)
-nf = model.norm_at_mid(pe_batch, rho_batch)
-b_batch = model(xi_flat, pe_flat, rho_flat, norm_factor=nf).reshape(bs, 101)
+b = model(xi, pe=torch.tensor(100.0), rho=torch.tensor(0.0))   # shape (101,)
 
 # Derivative via autograd
 xi_g = torch.linspace(0, 1, 101, requires_grad=True)
 b = model(xi_g, pe=torch.tensor(100.0), rho=torch.tensor(0.0))
-db = torch.autograd.grad(b.sum(), xi_g, create_graph=False)[0]
+db = torch.autograd.grad(b.sum(), xi_g)[0]
 
 # NumPy interface
-xi_np = np.linspace(0, 1, 101)
-b_np, db_np = model.value_grad_numpy(xi_np, pe=100.0, rho=0.0)
+b_np, db_np = model.value_grad_numpy(np.linspace(0, 1, 101), pe=100.0, rho=0.0)
 
-# Multi-bubble evaluation
-multi = MultiKANBubble1D(n_bubbles=2)
-b_both = multi(xi, pe, rho)       # shape: (2, 101)
+# Multi-bubble model
+multi = MultiKANBubble1D(n_bubbles=2, n_hidden=10, n_grid=8, spline_order=3)
+b_both = multi(xi, pe, rho)                    # shape (2, 101)
 b_np_both, db_np_both = multi.value_grad_numpy(xi_np, 100.0, 0.0)
 ```
 
-### Model persistence
+### Persistence
 
 ```python
-# Save
 torch.save(model.state_dict(), "models/kan_bubble.pt")
 
-# Load (must match architecture)
-model = KANBubble1D(n_hidden=5, n_grid=8, spline_order=3)
-model.load_state_dict(torch.load("models/kan_bubble.pt", map_location="cuda"))
-model.eval()
+model = MultiKANBubble1D(n_bubbles=2, n_hidden=10, n_grid=8, spline_order=3)
+model.load_state_dict(torch.load("models/kan_bubble.pt", map_location="cpu"))
 ```
 
----
+A trained checkpoint exists at `models/multi_kan_700ep_5k.pt` (matches
+`MultiKANBubble1D(n_bubbles=2, n_hidden=10, n_grid=8, spline_order=3)`).
+`models/multi_bubble_model_1k.pt` is an old-format checkpoint and does **not**
+load with the current architecture.
 
 ## Training
 
-### High-level API
-
 ```python
-from src.dataset_generation import train_multi_bubble_on_dataset, train_bubble_on_dataset
-from src.rfb_bubble import MultiKANBubble1D, KANBubble1D
-import torch
-
 # Two-bubble model (constant + xi modes)
-model = MultiKANBubble1D(n_bubbles=2, n_hidden=5, n_grid=8, spline_order=3)
 histories = train_multi_bubble_on_dataset(
-    model,
-    dataset["train"],
+    model, ds["train"],
     mode_names=("constant", "xi"),
-    n_epochs=700,
-    batch_size=256,
-    lr=1e-3,
-    grad_weight=0.0,    # gradient-matching weight (0 = value-only; gradient diverges)
+    n_epochs=700, batch_size=256, lr=1e-3,
+    grad_weight=0.0,    # value-only loss; the gradient term diverges
     n_quad=80,
-    verbose=True,
-    device=torch.device("cuda"),
+    device=device,
 )
 
 # Single bubble
-model = KANBubble1D(n_hidden=10, n_grid=8, spline_order=3)
-losses = train_bubble_on_dataset(
-    model,
-    dataset["train"]["constant"],
-    n_epochs=700, batch_size=256, lr=1e-3,
-    device=torch.device("cuda"),
-)
+from src.dataset_generation import train_bubble_on_dataset
+losses = train_bubble_on_dataset(model.bubbles[0], ds["train"]["constant"],
+                                 n_epochs=700, batch_size=256, lr=1e-3, device=device)
 ```
 
-### Training notes
+Training notes:
 
-- **Value-only loss** (`grad_weight=0.0`): gradient term with `create_graph=True` causes
-  divergence. Value-only MSE loss is stable and recommended.
-- **Input scaling**: `Pe_s = log1p(Pe)/6`, `ρ_s = log1p(ρ)/6`, `ξ_s = 2ξ−1` → all in [-1, 1].
-- **Envelope normalization** at ξ=0.5 is evaluated per unique (Pe,ρ) pair (not per quadrature
-  point).
-- **GPU speedup**: KANLayer uses 3D tensor + `F.linear` — ~20-42× faster than per-edge loops.
-  Full training ~1 min for 700 epochs on T4.
-
----
+- **Value-only loss** (`grad_weight=0.0`): the gradient-matching term with
+  `create_graph=True` diverges. Value-only MSE is stable.
+- Input scaling: `Pe_s = log1p(Pe)/6`, `ρ_s = log1p(ρ)/6`, `ξ_s = 2ξ − 1`.
 
 ## Static condensation assembly
 
-Learned bubbles are used as enrichment functions in a P1 FEM. Static condensation
-eliminates bubble DOFs element-by-element via the Schur complement:
+Bubbles are used as enrichment functions in P1 FEM; bubble DOFs are eliminated
+element-by-element via the Schur complement:
 
 ```
 A_cond = A_LL − A_Lb · inv(A_bb) · A_bL
 ```
 
 ```python
-from src.rfb_assembly import assemble_rfb_condensed_system
+from src.mesh import Mesh1D
+from src.quadrature import GaussLegendre
+from src.pde import AdvectionDiffusion1D
+from src.rfb_assembly import (assemble_rfb_condensed_system,
+                              recover_bubble_coefficients, RFBSolution1D)
 
-pe, rho = 312.5, 0.0
-A_cond, f_cond = assemble_rfb_condensed_system(pe, rho, bubble_provider=model)
-u_nodal = torch.linalg.solve(A_cond, f_cond)
+mesh = Mesh1D(0.0, 1.0, 8)                       # 8 elements
+quad = GaussLegendre(16)
+pde = AdvectionDiffusion1D(1e-3, 1.0, 0.0)
+pde.set_source_from_function(lambda x: np.ones_like(x))
 
-# Recover bubble coefficients for post-processing
-from src.rfb_assembly import recover_bubble_coefficients, RFBSolution1D
-local_data = None
+A_cond, f_cond, local_data = assemble_rfb_condensed_system(mesh, quad, pde, model)
+u_nodal = np.linalg.solve(A_cond, f_cond)
+
 u_bubbles = recover_bubble_coefficients(u_nodal, mesh, local_data)
-solution = RFBSolution1D(u_nodal, u_bubbles, mesh, bubble_provider=model, pde=pde)
+solution = RFBSolution1D(u_nodal, u_bubbles, mesh, model, pde)
 ```
 
-See `test_assembly_pipeline.py` for a complete end-to-end example.
-
----
-
 ## Convergence study
+
+Sweeps element counts and compares Classical P1 vs Exact RFB (vs KAN-RFB if a
+model is provided) against a fine FD reference.
 
 ```python
 from src.convergence import convergence_study, print_table, plot_convergence
 
-result = convergence_study(
-    eps=1e-4, beta=1.0, sigma=0.0, f_func=lambda x: 1.0,
-    h_values=[1/8, 1/16, 1/32, 1/64],
-    bubble_provider=model,   # trained MultiKANBubble1D
-    device=device,
-)
-print_table(result)
-plot_convergence(result, save_path="convergence.png")
+results = convergence_study(eps=1e-3, beta=1.0, sigma=0.0,
+                            mesh_sizes=[4, 8, 16, 32, 64],   # element counts
+                            kan_model=model)                  # or None
+print_table(results, title="Convergence")
+plot_convergence(results, save_path="convergence.png")
 ```
 
----
-
-## Colab usage (GPU training)
-
-Datasets are stored on Google Drive and loaded via symlink:
-
-```python
-# In Colab:
-from google.colab import drive
-drive.mount('/content/drive')
-!mkdir -p /content/ML_Galerkin_proj/datasets
-!ln -sf /content/drive/MyDrive/ML_Galerkin_proj/datasets/* /content/ML_Galerkin_proj/datasets/
-
-# Clone repo
-!git clone https://github.com/juanpaca/ML_Galerkin_proj.git
-%cd ML_Galerkin_proj
-!pip install torch numpy scipy matplotlib
-
-# Load frame-split dataset and train on GPU
-from src.dataset_generation import load_dataset, train_multi_bubble_on_dataset
-from src.rfb_bubble import MultiKANBubble1D
-import torch
-
-device = torch.device("cuda")
-dataset = load_dataset("rfb_5k_frame")
-model = MultiKANBubble1D(n_bubbles=2, n_hidden=5).to(device)
-histories = train_multi_bubble_on_dataset(
-    model, dataset["train"], n_epochs=700, batch_size=256, device=device,
-)
-
-# Save trained model back to Drive
-torch.save(model.state_dict(), "models/multi_kan_700ep_5k.pt")
-!cp models/multi_kan_700ep_5k.pt /content/drive/MyDrive/ML_Galerkin_proj/models/
-```
-
----
-
-## Running tests
+Standalone script (Classical + Exact RFB only):
 
 ```bash
-source venv/bin/activate
-python test_all.py                # 98 unit tests
-python test_assembly_pipeline.py  # end-to-end static condensation
+python convergence_study.py
 ```
 
----
+## Tests
 
-## Parameter reference
-
-### `KANBubble1D`
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `n_hidden` | 5 | Width of hidden KAN layer |
-| `n_grid` | 8 | Number of B-spline intervals |
-| `spline_order` | 3 | B-spline order (k=3 = quadratic) |
-| `delta` | 1e-4 | Softplus offset for numerical stability |
-| `n_eps` | 0 | Number of ε profile samples (0 = constant) |
-
-### `MultiKANBubble1D`
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `n_bubbles` | 2 | Number of bubble modes (constant + xi) |
-| `n_hidden` | 5 | Width of hidden KAN layer |
-
-### Training hyperparameters
-
-| Param | Default | Notes |
-|-------|---------|-------|
-| `n_epochs` | 300–700 | With early stopping |
-| `batch_size` | 128–256 | GPU memory |
-| `lr` | 1e-3 | Adam |
-| `grad_weight` | 0.0 | Use 0 (value-only); gradient term diverges |
-| `n_quad` | 80 | Target interpolation points per sample |
-| `sampling` | `"lhs"` | `"lhs"` or `"log_pe_rho"` for log-uniform Pe×ρ |
-
----
+```bash
+python test_all.py                # 114 checks (models, dataset, training, similarity)
+python test_assembly_pipeline.py  # end-to-end static condensation vs exact RFB
+```
 
 ## Source files
 
 ```
 src/
-├── kan.py                 KAN1D, _eval_bspline_basis, _extend_knots
-├── rfb_bubble.py          KANLayer (3D tensor), KANBubble1D [3→5→1], MultiKANBubble1D
+├── kan.py                 KAN1D edge function (B-spline + SiLU)
+├── rfb_bubble.py          KANLayer (3D tensor), KANBubble1D, MultiKANBubble1D
 ├── rfb_local.py           FD reference solver, local_parameters(ε,β,σ,h) → (Pe,ρ)
-├── rfb_exact.py           ExactRFBubble1D (ground truth)
-├── rfb_training.py        Low-level data generation helpers
-├── rfb_assembly.py        Static condensation: A_cond = A_LL − A_Lb·inv(A_bb)·A_bL
-├── dataset_generation.py  Full pipeline: sampling → FD → frame split → train
-├── convergence.py         Convergence study: P1 vs exact RFB vs KAN-RFB
+├── rfb_exact.py           ExactRFBubbleSet1D (ground truth)
+├── rfb_training.py        Low-level training helpers
+├── rfb_assembly.py        Static condensation assembly
+├── dataset_generation.py  Sampling → FD solves → split → train, similarity analysis
+├── convergence.py         Convergence study (P1 vs exact RFB vs KAN-RFB)
 ├── manufactured_solutions.py  Manufactured solutions for verification
-├── mesh.py                P1 mesh utilities
-├── quadrature.py          Gauss–Legendre quadrature on [0,1]
-├── pde.py                 PDE coefficient handling
-├── basis.py               Piecewise linear hat functions
+├── mesh.py, quadrature.py, pde.py, basis.py   P1 FEM infrastructure
 └── errors.py              L2, H1, energy norm errors
 ```
-
-### Trained models
-
-Models are saved to `models/` (created on first save). Not tracked in git.
-Upload to Google Drive for Colab use.
