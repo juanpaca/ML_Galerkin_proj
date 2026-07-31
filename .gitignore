@@ -4,7 +4,6 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 
-data.py
 try_this.txt
 tutorial.ipynb
 train_1k.py
