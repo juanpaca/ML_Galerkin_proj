@@ -308,7 +308,7 @@ check("cell_based_split: total samples match",
       f"train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}, total={len(train_idx)+len(val_idx)+len(test_idx)}")
 
 # --- 5.3 Load existing dataset ---
-ds = load_dataset("rfb_1k")
+ds = load_dataset("rfb_5k_frame")
 check("load_dataset: has train/val/test",
       "train" in ds and "val" in ds and "test" in ds)
 check("load_dataset: constant mode", "constant" in ds["train"])
@@ -320,12 +320,14 @@ check("load_dataset: n_total > 0",
       ds["metadata"]["n_total"] > 0,
       f"got {ds['metadata']['n_total']}")
 
-# --- 5.4 Cell map integrity ---
-cm = ds["metadata"].get("cell_map", {})
-check("dataset: cell_map exists", len(cm) > 0)
+# --- 5.4 Split-index integrity ---
+split_indices = ds["metadata"].get("split_indices", {})
+check("dataset: split_indices exists", len(split_indices) == 3,
+      f"got {list(split_indices)}")
 all_indices = set()
-for ck, (split, idxs) in cm.items():
-    all_indices.update(int(i) for i in idxs)
+for sname in ("train", "val", "test"):
+    if sname in split_indices:
+        all_indices.update(int(i) for i in split_indices[sname])
 n_tot = ds["metadata"]["n_total"]
 check("dataset: all indices 0..n_tot-1",
       all_indices == set(range(n_tot)),
@@ -455,6 +457,108 @@ check("exact: b(0) ≈ 0", approx(b_e[0], 0.0, tol=1e-3))
 check("exact: b(1) ≈ 0", approx(b_e[-1], 0.0, tol=1e-3))
 mid_ex = int(np.argmin(np.abs(xi_e - 0.5)))
 check("exact: b(0.5) ≈ 1", approx(b_e[mid_ex], 1.0, tol=1e-2))
+
+# =========================================================================
+# 8. Bubble similarity / redundancy analysis
+# =========================================================================
+print("\n" + "=" * 60)
+print("8. Bubble similarity / redundancy analysis")
+print("=" * 60)
+
+from src.dataset_generation import (
+    bubble_gram_matrix, bubble_cosine_similarity,
+    _off_diagonal_stats, _effective_rank, bubble_similarity_analysis,
+)
+
+xi_sim = np.linspace(0, 1, 101)
+
+# --- 8.1 Gram matrix matches analytic L2 inner product ---
+b_parab = 4.0 * xi_sim * (1.0 - xi_sim)
+G_parab = bubble_gram_matrix(np.vstack([b_parab]), xi_sim)
+expected = 16.0 / 30.0  # \int_0^1 [4x(1-x)]^2 dx
+check("similarity: Gram diag for 4x(1-x)", abs(G_parab[0, 0] - expected) / expected < 1e-3,
+      f"got {G_parab[0,0]:.6f}, expected {expected:.6f}")
+
+# --- 8.2 Cosine similarity: identical, scaled, orthogonal ---
+B_id = np.vstack([b_parab, b_parab])
+C_id = bubble_cosine_similarity(B_id, xi_sim)
+check("similarity: identical bubbles → C=1", abs(C_id[0, 1] - 1.0) < 1e-12)
+B_scale = np.vstack([b_parab, 3.0 * b_parab])
+C_scale = bubble_cosine_similarity(B_scale, xi_sim)
+check("similarity: scalar multiple → C=1", abs(C_scale[0, 1] - 1.0) < 1e-12)
+b_odd = np.sin(2 * np.pi * xi_sim)  # odd about 0.5 → orthogonal to even parabola
+B_orth = np.vstack([b_odd, b_parab])
+C_orth = bubble_cosine_similarity(B_orth, xi_sim)
+check("similarity: orthogonal bubbles → C≈0", abs(C_orth[0, 1]) < 1e-2,
+      f"got {C_orth[0,1]:.4e}")
+
+# --- 8.3 Off-diagonal stats ---
+stats = _off_diagonal_stats(C_id)
+check("similarity: off-diag stats n_pairs",
+      stats["n_pairs"] == 1 and stats["mean"] > 0.999)
+check("similarity: off-diag stats keys",
+      set(("mean", "median", "std", "min", "max", "frac_gt_0.90",
+           "frac_gt_0.95", "frac_gt_0.99", "n_pairs")) <= set(stats))
+
+# --- 8.4 Effective rank ---
+B_rank1 = np.vstack([b_parab * k for k in range(1, 8)])
+C_rank1 = bubble_cosine_similarity(B_rank1, xi_sim)
+er1 = _effective_rank(C_rank1)
+check("similarity: rank-1 set → eff_rank≈1", er1["effective_rank"] < 1.5,
+      f"got {er1['effective_rank']:.3f}")
+check("similarity: rank-1 set → n_95=1", er1["n_for_95pct_energy"] == 1,
+      f"got {er1['n_for_95pct_energy']}")
+B_sines = np.vstack([np.sin((k + 1) * np.pi * xi_sim) for k in range(6)])
+C_sines = bubble_cosine_similarity(B_sines, xi_sim)
+er6 = _effective_rank(C_sines)
+check("similarity: 6 distinct shapes → eff_rank>3", er6["effective_rank"] > 3.0,
+      f"got {er6['effective_rank']:.3f}")
+
+# --- 8.5 Full analysis on synthetic dataset (structure + speed) ---
+rng = np.random.default_rng(0)
+xi_data = np.linspace(0, 1, 100)
+def _synth_bubble(n, spread=0.3):
+    out = []
+    for _ in range(n):
+        pe_r = 10.0 ** rng.uniform(-0.5, 2.0)
+        rho_r = 10.0 ** rng.uniform(-0.5, 2.0)
+        sig = rng.uniform(spread, 2.0)
+        cx = rng.uniform(0.5 - 0.4 * sig, 0.5 + 0.4 * sig)
+        b = np.exp(-((xi_data - cx) ** 2) / (2 * sig ** 2))
+        b *= np.sin(np.pi * xi_data)  # vanish at boundaries
+        b /= b[np.argmin(abs(xi_data - 0.5))]
+        out.append(b)
+    return np.array(out)
+synth = {
+    "train": {"constant": {"pe": rng.uniform(1, 100, 60), "rho": rng.uniform(0, 100, 60),
+                           "b": _synth_bubble(60), "xi": xi_data}},
+    "val":   {"constant": {"pe": rng.uniform(1, 100, 30), "rho": rng.uniform(0, 100, 30),
+                           "b": _synth_bubble(30), "xi": xi_data}},
+    "test":  {"constant": {"pe": rng.uniform(1, 100, 30), "rho": rng.uniform(0, 100, 30),
+                           "b": _synth_bubble(30), "xi": xi_data}},
+}
+res_syn = bubble_similarity_analysis(synth, mode="constant", splits=("train", "val", "test"),
+                                     verbose=False, return_matrices=True)
+check("similarity: analysis has within/cross",
+      set(("within", "cross")) <= set(res_syn))
+check("similarity: within-split stats present",
+      set(("off_diagonal", "effective_rank")) <= set(res_syn["within"]["train"]))
+check("similarity: cross-split entries present",
+      "train_vs_val" in res_syn["cross"] and "train_vs_test" in res_syn["cross"])
+check("similarity: cross-split max-sim in [0,1]",
+      0.0 <= res_syn["cross"]["train_vs_val"]["stats"]["max_sim_mean"] <= 1.0)
+check("similarity: C matrices returned",
+      res_syn["within"]["train"]["C"].shape == (60, 60))
+
+# --- 8.6 Real dataset redundancy snapshot ---
+res_real = bubble_similarity_analysis(ds, mode="constant", splits=("train",),
+                                      n_eig_samples=300, verbose=False)
+er_real = res_real["within"]["train"]["effective_rank"]
+od_real = res_real["within"]["train"]["off_diagonal"]
+check("similarity: real train eff_rank small (redundant)",
+      er_real["effective_rank"] < 5.0, f"got {er_real['effective_rank']:.3f}")
+check("similarity: real train off-diag mean in [0,1]",
+      0.0 <= od_real["mean"] <= 1.0, f"got {od_real['mean']:.4f}")
 
 # =========================================================================
 # Summary

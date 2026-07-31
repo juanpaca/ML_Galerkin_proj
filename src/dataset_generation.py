@@ -1260,6 +1260,270 @@ def dataset_summary(dataset: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Bubble similarity / redundancy analysis
+# ---------------------------------------------------------------------------
+
+
+def bubble_gram_matrix(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
+    """L2 Gram matrix of bubbles: G[i, j] = ∫₀¹ b_i(ξ) b_j(ξ) dξ.
+
+    The integral is approximated with the trapezoidal rule on the FD grid.
+    Since every bubble is normalized (b(0.5) = 1), G[i, i] is the squared
+    L2 norm of bubble i.
+
+    Parameters
+    ----------
+    b_array : ndarray, shape (N, n_fd)
+        Bubble values on the FD grid, one row per sample.
+    xi : ndarray, shape (n_fd,)
+        FD grid points in [0, 1].
+
+    Returns
+    -------
+    ndarray, shape (N, N)
+        Symmetric positive semidefinite Gram matrix.
+    """
+    b = np.asarray(b_array, dtype=float)
+    dx = float(np.mean(np.diff(xi)))
+    return (b @ b.T) * dx
+
+
+def bubble_cosine_similarity(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
+    """Normalized (cosine) similarity matrix C[i, j] ∈ [-1, 1].
+
+    C[i, j] = ⟨b_i, b_j⟩ / (‖b_i‖ ‖b_j‖) with the L2 inner product.
+    C[i, j] ≈ 1 means the two bubbles are nearly identical in *shape*
+    (equal up to a positive scalar multiple), regardless of their norms.
+
+    Parameters
+    ----------
+    b_array : ndarray, shape (N, n_fd)
+        Bubble values on the FD grid, one row per sample.
+    xi : ndarray, shape (n_fd,)
+        FD grid points in [0, 1].
+
+    Returns
+    -------
+    ndarray, shape (N, N)
+        Symmetric cosine similarity matrix.
+    """
+    G = bubble_gram_matrix(b_array, xi)
+    d = np.sqrt(np.clip(np.diag(G), 1e-30, None))
+    C = G / np.outer(d, d)
+    return np.clip(C, -1.0, 1.0)
+
+
+def _off_diagonal_stats(C: np.ndarray) -> dict[str, float]:
+    """Summary statistics of the strictly off-diagonal entries of C."""
+    n = C.shape[0]
+    if n < 2:
+        return {
+            "mean": np.nan, "median": np.nan, "std": np.nan,
+            "min": np.nan, "max": np.nan,
+            "frac_gt_0.90": np.nan, "frac_gt_0.95": np.nan,
+            "frac_gt_0.99": np.nan, "n_pairs": 0,
+        }
+    vals = C[np.triu_indices(n, k=1)]
+    return {
+        "mean": float(vals.mean()),
+        "median": float(np.median(vals)),
+        "std": float(vals.std()),
+        "min": float(vals.min()),
+        "max": float(vals.max()),
+        "frac_gt_0.90": float(np.mean(vals > 0.90)),
+        "frac_gt_0.95": float(np.mean(vals > 0.95)),
+        "frac_gt_0.99": float(np.mean(vals > 0.99)),
+        "n_pairs": int(vals.size),
+    }
+
+
+def _effective_rank(C: np.ndarray) -> dict[str, float]:
+    """Eigenvalue decay and effective rank of a similarity matrix.
+
+    Eigenvalues λ₁ ≥ λ₂ ≥ ... are normalized to a probability vector
+    p_k = λ_k / Σλ. The effective rank is the exponential of the spectral
+    entropy, exp(−Σ p_k log p_k): a rank-1 matrix (all bubbles identical)
+    gives 1, while a full-rank matrix with uniform spectrum gives N.
+    """
+    evals = np.linalg.eigvalsh((C + C.T) / 2.0)
+    evals = np.clip(evals, 0.0, None)
+    total = evals.sum()
+    n = len(evals)
+    if total < 1e-30:
+        return {"effective_rank": 1.0, "rank": 0, "n_for_95pct_energy": 1}
+    p = evals / total
+    entropy = -np.sum(p * np.log(p + 1e-30))
+    cum_asc = np.cumsum(evals[::-1]) / total  # energy of top-k eigenvalues, k ascending
+    n_95 = int(np.searchsorted(cum_asc, 0.95)) + 1
+    n_95 = max(1, min(n_95, n))
+    return {
+        "effective_rank": float(np.exp(entropy)),
+        "rank": int(np.sum(evals > total * 1e-12)),
+        "n_for_95pct_energy": n_95,
+        "top1_energy": float(evals[-1] / total),
+        "top5_energy": float(evals[-5:].sum() / total),
+        "top10_energy": float(evals[-10:].sum() / total),
+    }
+
+
+def bubble_similarity_analysis(
+    dataset: dict[str, Any],
+    mode: str = "constant",
+    splits: tuple[str, ...] = ("train", "val", "test"),
+    n_eig_samples: int = 500,
+    seed: int = 0,
+    return_matrices: bool = False,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Analyze bubble redundancy and train/test leakage via L2 similarities.
+
+    Motivation (professor's concern): if all bubbles in the dataset are
+    nearly identical in shape, the KAN can memorize a single function and
+    still report low test error because every test bubble is already
+    (almost) present in the training set. The effective number of distinct
+    functions may be much smaller than the number of samples, inflating
+    generalization numbers.
+
+    For each requested split the function computes:
+      * the L2 cosine-similarity matrix C[i, j] = ⟨b_i, b_j⟩ / (‖b_i‖‖b_j‖),
+      * off-diagonal statistics (how often distinct bubbles are near-duplicates),
+      * the eigenvalue decay / effective rank on a random subsample
+        (how many genuinely distinct bubble shapes the split spans).
+
+    Cross-split (train vs val and train vs test) it reports, for every
+    non-train bubble, the *maximum* similarity to any training bubble.  If
+    most test bubbles have a near-duplicate twin in the training set
+    (similarity > 0.99), the split is effectively leaking: the test set is
+    not a genuine out-of-distribution benchmark.
+
+    Parameters
+    ----------
+    dataset : dict
+        Output of ``load_dataset`` or ``generate_dataset``.
+    mode : str
+        Bubble mode to analyze (``"constant"`` or ``"xi"``).
+    splits : tuple[str, ...]
+        Splits to analyze. The first one is treated as the reference
+        (training) split for cross-split leakage.
+    n_eig_samples : int
+        Number of (subsampled) bubbles used for the eigenvalue analysis.
+    seed : int
+        Seed for the eigenvalue subsample.
+    return_matrices : bool
+        If True, include the full cosine-similarity matrices in the result
+        (can be large: N×N float64 per split).
+    verbose : bool
+        Print a human-readable summary.
+
+    Returns
+    -------
+    dict with keys ``"mode"``, ``"within"`` (per-split stats and, if
+    requested, matrices) and ``"cross"`` (train-vs-split max similarities).
+    """
+    if mode not in ("constant", "xi"):
+        raise ValueError(f"Unknown mode: {mode} (expected 'constant' or 'xi')")
+
+    rng = np.random.default_rng(seed)
+    ref_split = splits[0]
+    result: dict[str, Any] = {"mode": mode, "within": {}, "cross": {}}
+    split_arrays: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    for sname in splits:
+        if sname not in dataset:
+            if verbose:
+                print(f"  [skip] split '{sname}' not in dataset")
+            continue
+        b = np.asarray(dataset[sname][mode]["b"], dtype=float)
+        xi = np.asarray(dataset[sname][mode]["xi"], dtype=float)
+        split_arrays[sname] = (b, xi)
+
+        C = bubble_cosine_similarity(b, xi)
+        within = {"n_samples": b.shape[0]}
+        within["off_diagonal"] = _off_diagonal_stats(C)
+
+        n = b.shape[0]
+        n_sub = min(n, n_eig_samples)
+        idx = rng.choice(n, size=n_sub, replace=False)
+        C_sub = bubble_cosine_similarity(b[idx], xi)
+        within["effective_rank"] = _effective_rank(C_sub)
+
+        if return_matrices:
+            within["C"] = C
+        result["within"][sname] = within
+
+    if ref_split in split_arrays:
+        B_ref, xi_ref = split_arrays[ref_split]
+        for sname, (b, xi) in split_arrays.items():
+            if sname == ref_split:
+                continue
+            # Cross Gram: rows = non-train samples, cols = reference samples.
+            dx = float(np.mean(np.diff(xi_ref)))
+            G_cross = (b @ B_ref.T) * dx
+            d_ref = np.sqrt(np.clip(np.diag(bubble_gram_matrix(B_ref, xi_ref)), 1e-30, None))
+            d_oth = np.sqrt(np.clip(np.diag(bubble_gram_matrix(b, xi)), 1e-30, None))
+            C_cross = G_cross / np.outer(d_oth, d_ref)
+            C_cross = np.clip(C_cross, -1.0, 1.0)
+            max_sim = C_cross.max(axis=1)
+            stats = {
+                "n_other": b.shape[0],
+                "max_sim_mean": float(max_sim.mean()),
+                "max_sim_median": float(np.median(max_sim)),
+                "max_sim_min": float(max_sim.min()),
+                "max_sim_max": float(max_sim.max()),
+                "frac_gt_0.90": float(np.mean(max_sim > 0.90)),
+                "frac_gt_0.95": float(np.mean(max_sim > 0.95)),
+                "frac_gt_0.99": float(np.mean(max_sim > 0.99)),
+            }
+            entry: dict[str, Any] = {"max_similarity": max_sim, "stats": stats}
+            if return_matrices:
+                entry["C"] = C_cross
+            result["cross"][f"{ref_split}_vs_{sname}"] = entry
+
+    if verbose:
+        _print_similarity_summary(result)
+    return result
+
+
+def _print_similarity_summary(result: dict[str, Any]) -> None:
+    """Pretty-print the output of bubble_similarity_analysis."""
+    mode = result["mode"]
+    print("\n" + "=" * 72)
+    print(f"  BUBBLE SIMILARITY ANALYSIS  (mode: {mode})")
+    print("=" * 72)
+    print("  Cosine similarity C[i,j] = <b_i,b_j> / (||b_i|| ||b_j||) in L2.")
+    print("  C near 1 => two bubbles are near-duplicates in shape.")
+    print()
+
+    for sname, within in result["within"].items():
+        od = within["off_diagonal"]
+        er = within["effective_rank"]
+        print(f"  Split '{sname}'  (N={within['n_samples']})")
+        print(f"    off-diagonal C: mean={od['mean']:.4f}  median={od['median']:.4f}"
+              f"  max={od['max']:.4f}")
+        print(f"    pairs with C>0.90: {100*od['frac_gt_0.90']:.1f}%  "
+              f"C>0.95: {100*od['frac_gt_0.95']:.1f}%  C>0.99: {100*od['frac_gt_0.99']:.1f}%")
+        print(f"    effective rank ({'subsample' if within['n_samples'] > 500 else 'full'}) = "
+              f"{er['effective_rank']:.1f}  |  "
+              f"{er['n_for_95pct_energy']} eigenvalues hold 95% of the energy  |  "
+              f"top-1 eigenvalue = {100*er['top1_energy']:.1f}% of energy")
+        print()
+
+    if result["cross"]:
+        print("  CROSS-SPLIT LEAKAGE (each other-split bubble vs nearest train bubble)")
+        for key, entry in result["cross"].items():
+            st = entry["stats"]
+            print(f"    {key}:  max-sim mean={st['max_sim_mean']:.4f}  "
+                  f"median={st['max_sim_median']:.4f}  max={st['max_sim_max']:.4f}")
+            print(f"      bubbles with a train twin: C>0.90: {100*st['frac_gt_0.90']:.1f}%  "
+                  f"C>0.95: {100*st['frac_gt_0.95']:.1f}%  C>0.99: {100*st['frac_gt_0.99']:.1f}%")
+        print()
+        print("  Reading: high within-split similarity => the dataset is redundant.")
+        print("  High fraction of test bubbles with a train twin (C>0.99) => the")
+        print("  test set is NOT a genuine out-of-distribution benchmark.")
+    print("=" * 72)
+
+
+# ---------------------------------------------------------------------------
 # Batch training from array-format dataset
 # ---------------------------------------------------------------------------
 
