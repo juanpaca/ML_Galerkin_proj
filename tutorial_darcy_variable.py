@@ -95,7 +95,16 @@ def sync():
 
 # %%
 metadata_path = Path(DATASET_SUBDIR_PATH) / f"{DATASET_NAME}_metadata.json"
-if GENERATE_DATA or not metadata_path.exists():
+dataset_needs_generation = GENERATE_DATA or not metadata_path.exists()
+if not dataset_needs_generation:
+    existing = load_dataset(os.path.join(DATASET_SUBDIR_PATH, DATASET_NAME))
+    dataset_needs_generation = not all(
+        mode in existing.get("train", {}) for mode in ("constant", "xi")
+    )
+    if dataset_needs_generation:
+        print("Existing Darcy dataset has only one mode; regenerating both modes.")
+
+if dataset_needs_generation:
     ds = generate_and_save_dataset(
         name=DATASET_NAME,
         subdir=DATASET_SUBDIR_PATH,
@@ -108,7 +117,7 @@ if GENERATE_DATA or not metadata_path.exists():
         seed=SEED,
     )
 else:
-    ds = load_dataset(os.path.join(DATASET_SUBDIR_PATH, DATASET_NAME))
+    ds = existing
 
 train_data = ds["train"]["constant"]
 xi = train_data["xi"]
