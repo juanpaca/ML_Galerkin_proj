@@ -20,6 +20,7 @@ Key scripts:
 - `test_all.py` — unit tests (includes analytic-FD cross-validation)
 - `test_assembly_pipeline.py` — end‑to‑end assembly test (untrained KAN vs exact RFB)
 - `convergence_study.py` — convergence study (Classical/Exact RFB, `--train-kan` for KAN)
+- `tutorial_darcy_variable.py` — generate and audit the piecewise-diffusion Darcy dataset
 
 Training is done via the API (`train_multi_bubble_on_dataset` in
 `src/dataset_generation.py`) — see README section 3 and `tutorial.py` section 5.
@@ -36,6 +37,7 @@ src/rfb_training.py     supervised: generate_rfb_training_data, train_bubble_mod
 src/rfb_assembly.py     statically condensed assembly: A_cond = A_LL − A_Lb·inv(A_bb)·A_bL
 src/mesh.py, quad.py, pde.py, basis.py → P1 FEM infrastructure
 src/errors.py           L2, H1, energy error computation
+src/darcy_variable.py   piecewise epsilon profiles, conservative Darcy solver, dataset pool
 ```
 
 ## Key details

@@ -11,6 +11,7 @@ from src.dataset_generation import (
     bubble_cosine_similarity,
     bubble_gram_matrix,
     max_cross_similarity,
+    bubble_similarity_analysis,
     save_dataset,
     load_dataset,
 )
@@ -25,6 +26,11 @@ from src.rfb_assembly import assemble_classical_system
 from src.rfb_assembly import assemble_rfb_condensed_system
 from src.rfb_bubble import MultiKANBubble1D
 from src.rfb_exact import ExactRFBubble1D
+from src.darcy_variable import (
+    PiecewiseDiffusion, random_piecewise_diffusion, solve_darcy_1d,
+    profile_features, generate_darcy_pool,
+)
+from data_generation_darcy_variable import build_split_dataset
 from src.training import train_multi_bubble_on_dataset
 from src.dataset_generation import train_multi_bubble_on_dataset as implementation_trainer
 
@@ -59,6 +65,8 @@ def test_shape_split_honors_training_cardinality_and_no_twins():
     assert not set(split["train"]) & set(split["val"] + split["test"])
     ood = split["val"] + split["test"]
     assert np.max(C[np.ix_(split["train"], ood)]) <= 0.999
+    all_safe = shape_no_leak_split(C, n_train=None, n_val=2, n_test=2, theta=0.999)
+    assert len(all_safe["train"]) >= len(split["train"])
 
 
 def test_shape_split_fails_when_target_cannot_survive():
@@ -196,3 +204,47 @@ def test_data_generation_switch_supports_piecewise_profiles_reproducibly():
     assert "eps_ratios" in pool_a["constant"]
     assert pool_a["constant"]["eps_ratios"].shape == (8, 3)
     assert np.allclose(pool_a["constant"]["eps_ratios"], pool_b["constant"]["eps_ratios"])
+
+
+def test_darcy_constant_profile_matches_normalized_exact_shape():
+    result = solve_darcy_1d(2.0, length=3.0, n_points=101)
+    xi = result["xi"]
+    assert np.allclose(result["u_norm"], 4.0 * xi * (1.0 - xi), atol=2e-4)
+
+
+def test_darcy_piecewise_profile_and_features():
+    profile = PiecewiseDiffusion(np.array([0.0, 0.4, 1.0]), np.array([0.1, 100.0]))
+    xi = np.array([0.1, 0.4, 0.9])
+    assert np.array_equal(profile.evaluate(xi), np.array([0.1, 100.0, 100.0]))
+    features = profile_features(profile, 6)
+    assert features.shape == (6,)
+    assert np.all(np.isfinite(features)) and np.all(features > 0.0)
+    result = solve_darcy_1d(profile, length=2.0, n_points=201)
+    assert np.all(np.isfinite(result["u_norm"]))
+    assert np.isclose(result["u_norm"][0], 0.0)
+    assert np.isclose(result["u_norm"][-1], 0.0)
+
+
+def test_darcy_pool_is_reproducible_and_has_fixed_features():
+    pool_a = generate_darcy_pool(n_samples=12, n_fd_points=41,
+                                 n_profile_features=5, seed=13)
+    pool_b = generate_darcy_pool(n_samples=12, n_fd_points=41,
+                                 n_profile_features=5, seed=13)
+    a = pool_a["constant"]
+    b = pool_b["constant"]
+    assert a["b"].shape == (12, 41)
+    assert a["eps_ratios"].shape == (12, 5)
+    assert np.allclose(a["b"], b["b"])
+    assert np.allclose(a["eps_ratios"], b["eps_ratios"])
+
+
+def test_darcy_tutorial_split_is_leak_free():
+    pool = generate_darcy_pool(n_samples=100, n_fd_points=41,
+                               n_profile_features=4, seed=2)
+    dataset = build_split_dataset(pool, theta=0.99,
+                                  train_frac=0.35, val_frac=0.15,
+                                  test_frac=0.25)
+    report = bubble_similarity_analysis(dataset, mode="constant", verbose=False)
+    stats = report["cross"]["train_vs_test"]["stats"]
+    assert stats["frac_gt_0.99"] == 0.0
+    assert stats["max_sim_max"] <= 0.99

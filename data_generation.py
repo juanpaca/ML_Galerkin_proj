@@ -69,8 +69,9 @@ def shape_no_leak_split(C, n_train, n_val, n_test, theta=0.99):
     ----------
     C : ndarray, shape (N, N)
         Cosine-similarity matrix (elementwise max over the analyzed modes).
-    n_train, n_val, n_test : int
-        Target split sizes (the leak filter may shrink train).
+    n_train, n_val, n_test : int or None
+        Target split sizes. If ``n_train`` is None, every sample surviving
+        the no-twin filter is used for training.
     theta : float
         Twin-similarity threshold. Similarity > theta means "near-duplicate".
 
@@ -97,6 +98,8 @@ def shape_no_leak_split(C, n_train, n_val, n_test, theta=0.99):
     max_sim_to_ood = C[:, ood].max(axis=1)
     candidates = np.arange(N)[max_sim_to_ood <= theta]
     candidates = candidates[~np.isin(candidates, np.asarray(ood))]
+    if n_train is None:
+        n_train = len(candidates)
     if len(candidates) < n_train:
         raise RuntimeError(
             f"Only {len(candidates)} training samples survive the no-twin filter, "
@@ -175,6 +178,8 @@ def shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
         max_sim_to_ood[start:stop] = block_max
     candidates = np.flatnonzero(max_sim_to_ood <= theta)
     candidates = candidates[~np.isin(candidates, np.asarray(ood))]
+    if n_train is None:
+        n_train = len(candidates)
     if len(candidates) < n_train:
         raise RuntimeError(f"Only {len(candidates)} training samples survive the no-twin filter, "
                            f"but n_train={n_train}")

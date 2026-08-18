@@ -120,6 +120,23 @@ The equivalent general switch is
 profiles default to `--variable-eps-fraction 1`; use a fraction in `[0, 1]`
 to mix constant and variable samples.
 
+### Darcy variable-diffusion tutorial
+
+For the source-only conservative problem
+`-(epsilon(x)u')' = f` on `(0, L)`, run:
+
+```bash
+venv/bin/python tutorial_darcy_variable.py --no-plot
+```
+
+This creates `datasets/data_darcy_variable/`, stores piecewise profile
+geometry and normalized solution shapes, and audits train/test shape twins.
+The generated default dataset contains 5,000 profiles and uses every profile
+that remains safe after the no-twin filter for training. Use
+`--train-frac` only when a fixed training size is required. The default has
+0% test twins at the `0.99` similarity threshold. The script prints the
+external KAN training recipe but does not train locally.
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `--n-samples` | 5000 | Pool size before the no-twin filtering |
