@@ -6,7 +6,10 @@ from src.quadrature import GaussLegendre
 from src.pde import AdvectionDiffusion1D
 from src.basis import LagrangeBasis1D
 from src.rfb_bubble import KANBubble1D, MultiKANBubble1D
-from src.rfb_local import reference_p1_basis, local_parameters
+from src.rfb_local import (
+    reference_p1_basis, local_parameters, evaluate_diffusion_profile,
+    trapezoidal_weights,
+)
 
 
 def _apply_dirichlet_zero(A, f: np.ndarray):
@@ -24,7 +27,10 @@ def _gauss_legendre_01(n: int) -> np.ndarray:
 
 
 def _eps_profile(
-    xl: float, xr: float, pde: AdvectionDiffusion1D, n_eps: int
+    xl: float, xr: float, pde: AdvectionDiffusion1D, n_eps: int,
+    xi_average: np.ndarray | None = None,
+    eps_average: np.ndarray | None = None,
+    average_weights: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray | None]:
     """Compute element-averaged diffusion and (optional) eps ratios at sample points.
 
@@ -36,15 +42,30 @@ def _eps_profile(
         eps(x_sample) / eps_avg at n_eps Gauss-Legendre nodes, or None if n_eps == 0.
     """
     h = xr - xl
-    xi_coarse = np.linspace(0.0, 1.0, 10)
-    eps_vals = pde.diffusion(xl + h * xi_coarse)
-    eps_avg = float(np.mean(eps_vals))
+    if xi_average is None:
+        xi_average = np.linspace(0.0, 1.0, max(64, 4 * n_eps))
+        eps_average = evaluate_diffusion_profile(
+            lambda x: pde.diffusion(xl + h * x), xi_average
+        )
+    else:
+        xi_average = np.asarray(xi_average, dtype=float)
+        eps_average = evaluate_diffusion_profile(
+            eps_average if eps_average is not None
+            else lambda x: pde.diffusion(xl + h * x), xi_average
+        )
+    weights = (trapezoidal_weights(xi_average) if average_weights is None
+               else np.asarray(average_weights, dtype=float))
+    if weights.shape != xi_average.shape or np.any(weights <= 0.0):
+        raise ValueError("diffusion averaging weights must match xi and be positive")
+    eps_avg = float(np.sum(weights * eps_average) / np.sum(weights))
 
     if n_eps <= 0:
         return eps_avg, None
 
     xi_sample = _gauss_legendre_01(n_eps)
-    eps_sample = pde.diffusion(xl + h * xi_sample)
+    eps_sample = evaluate_diffusion_profile(
+        lambda x: pde.diffusion(xl + h * x), xi_sample
+    )
     return eps_avg, np.asarray(eps_sample / eps_avg, dtype=float)
 
 
@@ -111,14 +132,17 @@ def local_enriched_matrices(
     w_q = h * w_ref
 
     # Coefficient values at quadrature points
-    eps_q = pde.diffusion(x_q)
+    eps_q = evaluate_diffusion_profile(pde.diffusion, x_q)
     beta_q = pde.advection(x_q)
     sigma_q = pde.reaction(x_q)
     src_q = pde.source(x_q)
 
     # Element-averaged diffusion for bubble parameters
     n_eps = getattr(bubble, 'n_eps', 0)
-    eps_avg, eps_ratios = _eps_profile(xl, xr, pde, n_eps)
+    eps_avg, eps_ratios = _eps_profile(
+        xl, xr, pde, n_eps, xi_average=xi,
+        eps_average=eps_q, average_weights=w_ref,
+    )
     pe, rho = local_parameters(eps_avg, float(np.mean(beta_q)), float(np.mean(sigma_q)), h)
 
     # P1 basis and bubble

@@ -1,4 +1,44 @@
 import numpy as np
+from typing import Callable
+
+
+def evaluate_diffusion_profile(
+    eps: float | np.ndarray | Callable[[np.ndarray], np.ndarray], xi: np.ndarray
+) -> np.ndarray:
+    """Evaluate and validate a positive diffusion profile on ``xi``.
+
+    ``eps`` may be a positive scalar, an array sampled on ``xi``, or a
+    callable accepting the complete vector of coordinates. This is the common
+    profile boundary used by the FD reference solver and FEM assembly.
+    """
+    xi = np.asarray(xi, dtype=float)
+    if xi.ndim != 1 or xi.size < 2 or not np.all(np.isfinite(xi)):
+        raise ValueError("xi must be a finite one-dimensional grid")
+    if np.any(np.diff(xi) <= 0):
+        raise ValueError("xi must be strictly increasing")
+    if callable(eps):
+        values = np.asarray(eps(xi), dtype=float)
+    else:
+        values = np.asarray(eps, dtype=float)
+    if values.ndim == 0:
+        values = np.full(xi.shape, float(values))
+    if values.shape != xi.shape:
+        raise ValueError("diffusion profile must match the xi grid")
+    if not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError("diffusion profile must contain positive finite values")
+    return values
+
+
+def trapezoidal_weights(xi: np.ndarray) -> np.ndarray:
+    """Return integration weights for a strictly increasing 1D grid."""
+    xi = np.asarray(xi, dtype=float)
+    if xi.ndim != 1 or xi.size < 2 or np.any(np.diff(xi) <= 0):
+        raise ValueError("xi must be a strictly increasing grid")
+    weights = np.empty(xi.size, dtype=float)
+    weights[0] = 0.5 * (xi[1] - xi[0])
+    weights[-1] = 0.5 * (xi[-1] - xi[-2])
+    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+    return weights
 
 
 def _solve_tridiagonal(
@@ -75,10 +115,9 @@ def solve_reference_rfb(
 
     Parameters
     ----------
-    eps : float or ndarray of shape (n_points,)
-        Diffusion coefficient.  If a float, constant across the element.
-        If an array, per-grid-point values are used (supports variable
-        diffusion within the element).  The array must have length n_points.
+    eps : float, ndarray, or callable
+        Diffusion coefficient. A scalar, a profile sampled on the FD grid, or
+        a callable ``eps(xi)`` returning the profile can be supplied.
     beta, sigma : float
         Advection and reaction (constant within the element).
     h : float
@@ -119,32 +158,23 @@ def solve_reference_rfb(
     else:
         raise ValueError(f"unknown residual_mode: {residual_mode}")
 
-    eps_arr = np.asarray(eps, dtype=float)
-    if eps_arr.ndim == 0:
-        if not np.isfinite(eps_arr) or eps_arr <= 0.0:
-            raise ValueError("eps must be a positive finite value")
-        eps_interior = np.full(n, eps_arr)
-    else:
-        if len(eps_arr) != n_points:
-            raise ValueError(
-                f"eps array length {len(eps_arr)} != n_points {n_points}"
-            )
-        if not np.all(np.isfinite(eps_arr)) or np.any(eps_arr <= 0.0):
-            raise ValueError("eps profile must contain positive finite values")
-        eps_interior = np.interp(interior, xi, eps_arr)
-
-    diff = eps_interior / (h * h)
-    diff_coef = diff / dxi**2
+    eps_grid = evaluate_diffusion_profile(eps, xi)
+    # Face diffusion values give a conservative discretization of
+    # -(eps(xi) b_xi)_xi. Harmonic averaging is robust across jumps.
+    eps_faces = 2.0 * eps_grid[:-1] * eps_grid[1:] / (eps_grid[:-1] + eps_grid[1:])
+    diff_scale = 1.0 / (h * h * dxi**2)
+    diff_left = eps_faces[:-1] * diff_scale
+    diff_right = eps_faces[1:] * diff_scale
     adv = beta / h
     adv_coef = adv / dxi
     if beta >= 0.0:
-        lower = -diff_coef - adv_coef
-        diag = 2.0 * diff_coef + sigma + adv_coef
-        upper = -diff_coef
+        lower = -diff_left - adv_coef
+        diag = diff_left + diff_right + sigma + adv_coef
+        upper = -diff_right
     else:
-        lower = -diff_coef
-        diag = 2.0 * diff_coef + sigma - adv_coef
-        upper = -diff_coef + adv_coef
+        lower = -diff_left
+        diag = diff_left + diff_right + sigma - adv_coef
+        upper = -diff_right + adv_coef
 
     b_int = _solve_tridiagonal(lower[1:], diag, upper[:-1], rhs)
 

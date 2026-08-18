@@ -5,7 +5,10 @@ import numpy as np
 import torch
 
 from src.rfb_bubble import KANBubble1D, MultiKANBubble1D
-from src.rfb_local import solve_reference_rfb, interpolate_target, local_parameters
+from src.rfb_local import (
+    solve_reference_rfb, interpolate_target, local_parameters,
+    evaluate_diffusion_profile, trapezoidal_weights,
+)
 
 DATASET_SUBDIR = "datasets"
 DTYPE = np.float32
@@ -195,12 +198,10 @@ def generate_rfb_training_data_variable_eps(
     samples = []
     for _ in range(n_samples):
         scale = 10.0 ** rng.uniform(-2.0, 0.0)
-        eps_on_xi = np.asarray(eps_fn(xi_fd), dtype=float)
-        if eps_on_xi.ndim == 0:
-            eps_on_xi = np.full(n_fd_points, eps_on_xi)
+        eps_on_xi = evaluate_diffusion_profile(eps_fn, xi_fd)
         eps_on_xi *= scale  # random scaling
 
-        eps_avg = float(np.mean(eps_on_xi))
+        eps_avg = float(np.sum(trapezoidal_weights(xi_fd) * eps_on_xi))
         target = solve_reference_rfb(eps_on_xi, beta, sigma, h,
                                       residual_mode=residual_mode,
                                       n_points=n_fd_points)

@@ -4,7 +4,9 @@ import json
 import numpy as np
 import pytest
 
-from data_generation import shape_no_leak_split, shape_no_leak_split_from_pool
+from data_generation import (
+    shape_no_leak_split, shape_no_leak_split_from_pool, generate_pool, merge_pool,
+)
 from src.dataset_generation import (
     bubble_cosine_similarity,
     bubble_gram_matrix,
@@ -12,11 +14,17 @@ from src.dataset_generation import (
     save_dataset,
     load_dataset,
 )
-from src.rfb_local import local_parameters, solve_reference_rfb, _solve_tridiagonal
+from src.rfb_local import (
+    local_parameters, solve_reference_rfb, _solve_tridiagonal,
+    evaluate_diffusion_profile,
+)
 from src.mesh import Mesh1D
 from src.quadrature import GaussLegendre
 from src.pde import AdvectionDiffusion1D
 from src.rfb_assembly import assemble_classical_system
+from src.rfb_assembly import assemble_rfb_condensed_system
+from src.rfb_bubble import MultiKANBubble1D
+from src.rfb_exact import ExactRFBubble1D
 from src.training import train_multi_bubble_on_dataset
 from src.dataset_generation import train_multi_bubble_on_dataset as implementation_trainer
 
@@ -85,6 +93,36 @@ def test_local_api_rejects_invalid_coefficients():
                            np.array([0.0]), np.ones(2))
 
 
+def test_constant_diffusion_scalar_array_and_callable_are_equivalent():
+    xi = np.linspace(0.0, 1.0, 101)
+    scalar = solve_reference_rfb(0.2, 1.0, 0.3, 1.0, n_points=101)
+    array = solve_reference_rfb(np.full(xi.size, 0.2), 1.0, 0.3, 1.0,
+                                n_points=101)
+    function = solve_reference_rfb(lambda x: np.full(x.shape, 0.2), 1.0,
+                                   0.3, 1.0, n_points=101)
+    assert np.allclose(scalar["b"], array["b"])
+    assert np.allclose(scalar["b"], function["b"])
+
+
+def test_piecewise_diffusion_profile_is_supported_and_validated():
+    xi = np.linspace(0.0, 1.0, 401)
+    profile = lambda x: np.where(x < 0.5, 0.1, 1.0)
+    values = evaluate_diffusion_profile(profile, xi)
+    assert values.shape == xi.shape
+    assert np.all(values > 0.0)
+    result = solve_reference_rfb(profile, 0.5, 0.2, 1.0, n_points=401)
+    assert np.all(np.isfinite(result["b"]))
+    assert np.isclose(result["b"][0], 0.0)
+    assert np.isclose(result["b"][-1], 0.0)
+    with pytest.raises(ValueError, match="positive"):
+        evaluate_diffusion_profile(lambda x: np.where(x < 0.5, 0.0, 1.0), xi)
+    exact = ExactRFBubble1D(profile, 0.5, 0.2, 1.0,
+                            residual_mode="constant", n_points=401)
+    values, gradients = exact.value_grad_numpy(xi)
+    assert values.shape == xi.shape
+    assert gradients.shape == xi.shape
+
+
 def test_dataset_round_trip_and_checksum(tmp_path):
     xi = np.linspace(0.0, 1.0, 9)
     mode = {
@@ -120,5 +158,41 @@ def test_sparse_classical_assembly_matches_dense():
     assert np.allclose(sparse_f, dense_f)
 
 
+def test_piecewise_diffusion_assembly_is_finite():
+    mesh = Mesh1D(0.0, 1.0, 8)
+    quad = GaussLegendre(8)
+    pde = AdvectionDiffusion1D(0.2, 1.0, 0.1)
+    pde.set_diffusion_from_function(lambda x: np.where(x < 0.5, 0.1, 1.0))
+    A, f = assemble_classical_system(mesh, quad, pde, sparse_output=True)
+    assert np.all(np.isfinite(A.data))
+    assert np.all(np.isfinite(f))
+    bubble = MultiKANBubble1D(n_bubbles=2, n_hidden=3, n_grid=4, n_eps=4)
+    A_rfb, f_rfb, _ = assemble_rfb_condensed_system(
+        mesh, quad, pde, bubble, sparse_output=True
+    )
+    assert np.all(np.isfinite(A_rfb.data))
+    assert np.all(np.isfinite(f_rfb))
+
+
 def test_canonical_training_facade():
     assert train_multi_bubble_on_dataset is implementation_trainer
+
+
+def test_data_generation_switch_supports_piecewise_profiles_reproducibly():
+    ds_a, cfg_a = generate_pool(
+        8, (0.5, 2.0), (0.1, 1.0), 17, n_fd_points=41,
+        diffusion_profile="layered", variable_eps_fraction=1.0,
+        variable_eps_n_quad=3,
+    )
+    ds_b, cfg_b = generate_pool(
+        8, (0.5, 2.0), (0.1, 1.0), 17, n_fd_points=41,
+        diffusion_profile="layered", variable_eps_fraction=1.0,
+        variable_eps_n_quad=3,
+    )
+    assert cfg_a.variable_eps_profile == "layered"
+    assert cfg_a.variable_eps_fraction == 1.0
+    pool_a, _, _ = merge_pool(ds_a)
+    pool_b, _, _ = merge_pool(ds_b)
+    assert "eps_ratios" in pool_a["constant"]
+    assert pool_a["constant"]["eps_ratios"].shape == (8, 3)
+    assert np.allclose(pool_a["constant"]["eps_ratios"], pool_b["constant"]["eps_ratios"])

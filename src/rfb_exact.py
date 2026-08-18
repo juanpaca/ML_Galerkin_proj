@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Callable
 
 from src.rfb_local import solve_reference_rfb, interpolate_target
 
@@ -19,14 +20,14 @@ class ExactRFBubble1D:
 
     def __init__(
         self,
-        eps: float,
+        eps: float | np.ndarray | Callable[[np.ndarray], np.ndarray],
         beta: float,
         sigma: float,
         h: float,
         residual_mode: str = "constant",
         n_points: int = 4000,
     ):
-        self.eps = float(eps)
+        self.eps = eps
         self.beta = float(beta)
         self.sigma = float(sigma)
         self.h = float(h)
@@ -56,7 +57,7 @@ class ExactRFBubbleSet1D:
 
     def __init__(
         self,
-        eps: float,
+        eps: float | np.ndarray | Callable[[np.ndarray], np.ndarray],
         beta: float,
         sigma: float,
         h: float,

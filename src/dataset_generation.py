@@ -41,7 +41,10 @@ import torch
 from scipy.stats import qmc
 
 from src.rfb_bubble import KANBubble1D, MultiKANBubble1D
-from src.rfb_local import solve_reference_rfb, local_parameters, interpolate_target
+from src.rfb_local import (
+    solve_reference_rfb, local_parameters, interpolate_target,
+    evaluate_diffusion_profile, trapezoidal_weights,
+)
 from src.rfb_training import (
     generate_rfb_training_data_cs,
     save_training_data,
@@ -383,9 +386,17 @@ def _build_variable_eps_sweep(
             scale = 10.0 ** rng.uniform(-2.0, 0.0)
         else:
             scale = 1.0
-        eps_on_xi = np.asarray(eps_profile_fn(xi_fd, eps_mean_i), dtype=float)
-        eps_on_xi *= scale
-        eps_avg = float(np.mean(eps_on_xi))
+        profile_seed = int(rng.integers(0, 2**32 - 1))
+        try:
+            eps_on_xi = np.asarray(
+                eps_profile_fn(xi_fd, eps_mean_i, seed=profile_seed), dtype=float
+            )
+        except TypeError:
+            eps_on_xi = np.asarray(eps_profile_fn(xi_fd, eps_mean_i), dtype=float)
+        eps_on_xi = evaluate_diffusion_profile(eps_on_xi * scale, xi_fd)
+        eps_avg = float(np.sum(
+            trapezoidal_weights(xi_fd) * eps_on_xi
+        ))
         target = solve_reference_rfb(
             eps_on_xi, float(beta_i), float(sigma_i), h,
             residual_mode=residual_mode,
@@ -971,7 +982,7 @@ def generate_dataset(
                 if progress_callback is not None else None
             samples = _build_variable_eps_sweep(
                 var_params, config.h,
-                eps_profile_fn=lambda xi, em: profile_fn(xi, em),
+                eps_profile_fn=profile_fn,
                 n_eps=n_eps,
                 residual_mode=mode,
                 n_fd_points=config.n_fd_points,

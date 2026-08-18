@@ -190,7 +190,11 @@ def shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
 # Pool generation and helpers
 # ---------------------------------------------------------------------------
 
-def generate_pool(n_samples, pe_range, rho_range, seed, n_fd_points=400):
+def generate_pool(
+    n_samples, pe_range, rho_range, seed, n_fd_points=400,
+    diffusion_profile="constant", variable_eps_fraction=0.0,
+    variable_eps_n_quad=5,
+):
     """Generate a pool with a throwaway random split, then merge it back."""
     config = DatasetConfig(
         n_samples=n_samples,
@@ -202,6 +206,9 @@ def generate_pool(n_samples, pe_range, rho_range, seed, n_fd_points=400):
         standardize=False,
         seed=seed,
         n_fd_points=n_fd_points,
+        variable_eps_profile=diffusion_profile,
+        variable_eps_fraction=variable_eps_fraction,
+        variable_eps_n_quad=variable_eps_n_quad,
     )
     ds = generate_dataset(config)
     return ds, config
@@ -287,7 +294,36 @@ def main():
     ap.add_argument("--test-frac", type=float, default=0.25)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--name", default="rfb_5k_noleak")
+    ap.add_argument(
+        "--diffusion-profile",
+        choices=("constant", "sinusoidal", "layered", "smooth_random"),
+        default="constant",
+        help="diffusion profile family; default is constant",
+    )
+    ap.add_argument(
+        "--piecewise-diffusion", action="store_true",
+        help="shortcut for --diffusion-profile layered with variable profiles in every sample",
+    )
+    ap.add_argument(
+        "--variable-eps-fraction", type=float, default=None,
+        help="fraction of samples with variable diffusion (default: 0 for constant, 1 for a nonconstant profile)",
+    )
+    ap.add_argument(
+        "--variable-eps-n-quad", type=int, default=5,
+        help="number of fixed diffusion-profile samples provided to the KAN",
+    )
     args = ap.parse_args()
+
+    if args.piecewise_diffusion:
+        if args.diffusion_profile != "constant":
+            ap.error("--piecewise-diffusion cannot be combined with --diffusion-profile")
+        args.diffusion_profile = "layered"
+    if args.variable_eps_fraction is None:
+        args.variable_eps_fraction = 0.0 if args.diffusion_profile == "constant" else 1.0
+    if not 0.0 <= args.variable_eps_fraction <= 1.0:
+        ap.error("--variable-eps-fraction must be between 0 and 1")
+    if args.variable_eps_n_quad < 1:
+        ap.error("--variable-eps-n-quad must be positive")
 
     t0 = time.time()
 
@@ -297,11 +333,17 @@ def main():
           f"(log-uniform Pe x rho)")
     print("=" * 72)
     ds, config = generate_pool(args.n_samples, tuple(args.pe_range),
-                               tuple(args.rho_range), args.seed,
-                               n_fd_points=args.n_fd_points)
+                                tuple(args.rho_range), args.seed,
+                                n_fd_points=args.n_fd_points,
+                                diffusion_profile=args.diffusion_profile,
+                                variable_eps_fraction=args.variable_eps_fraction,
+                                variable_eps_n_quad=args.variable_eps_n_quad)
     pool, modes, n = merge_pool(ds)
     print(f"  pool: {n} samples, modes {modes}, "
           f"FD resolution = {args.n_fd_points} points")
+    print(f"  diffusion: {args.diffusion_profile} "
+          f"(variable fraction={args.variable_eps_fraction:.2f}, "
+          f"n_eps={args.variable_eps_n_quad})")
 
     # ---- 2. Cosine-similarity analysis (the problem) --------------------
     print("\n" + "=" * 72)

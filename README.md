@@ -27,6 +27,24 @@ Bubbles add per-element enrichment functions that resolve the sub-element
 behavior and are eliminated locally (static condensation), so the method stays
 mesh-independent and oscillation-free.
 
+### Variable diffusion
+
+Diffusion may be constant, array-valued, or a vectorized callable:
+
+```python
+import numpy as np
+
+pde.set_diffusion_from_function(
+    lambda x: np.where(x < 0.5, 0.1, 1.0)
+)
+```
+
+The reference solver uses the conservative operator `-(ε b')'` with harmonic
+face diffusion, including for piecewise profiles. Variable-diffusion training
+uses `generate_rfb_training_data_variable_eps`; the KAN receives a fixed-size
+sampled profile through `n_eps`. Use the same `n_eps` when assembling a trained
+variable-diffusion model.
+
 ## Setup
 
 ```bash
@@ -86,6 +104,21 @@ venv/bin/python data_generation.py \
     --theta 0.99 \
     --name rfb_5k_noleak
 ```
+
+Constant diffusion is the default. To generate a fully piecewise-variable
+diffusion pool, use:
+
+```bash
+venv/bin/python data_generation.py \
+    --piecewise-diffusion \
+    --variable-eps-n-quad 8 \
+    --name rfb_5k_piecewise
+```
+
+The equivalent general switch is
+`--diffusion-profile {constant,sinusoidal,layered,smooth_random}`. Nonconstant
+profiles default to `--variable-eps-fraction 1`; use a fraction in `[0, 1]`
+to mix constant and variable samples.
 
 | Flag | Default | Meaning |
 |---|---|---|

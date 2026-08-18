@@ -135,7 +135,9 @@ class KANBubble1D(nn.Module):
             eps_ratios = torch.as_tensor(eps_ratios, dtype=xi.dtype, device=xi.device)
             if eps_ratios.dim() == 1:
                 eps_ratios = eps_ratios.expand(xi.shape[0], -1)
-            eps_s = torch.log1p(torch.clamp(eps_ratios, min=0.0)) / 6.0
+            if eps_ratios.shape[0] != xi.shape[0] or not torch.isfinite(eps_ratios).all() or (eps_ratios <= 0).any():
+                raise ValueError("eps_ratios must be positive finite profile samples")
+            eps_s = torch.log(eps_ratios) / 6.0
             scaled = torch.cat([scaled, eps_s], dim=-1)
         return scaled
 
