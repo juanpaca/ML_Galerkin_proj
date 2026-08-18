@@ -211,6 +211,23 @@ print(f"Training samples: {len(train_data['pe'])}")
 # profile. The gradient term is disabled, as in the stable training workflow.
 
 # %%
+# Protect against a stale ``ds`` variable when only this cell is rerun in
+# Colab. Both P1 source modes must exist before training starts.
+if not all(mode in ds.get("train", {}) for mode in ("constant", "xi")):
+    print("Stale single-mode dataset detected before training; regenerating.")
+    ds = generate_and_save_dataset(
+        name=DATASET_NAME,
+        subdir=DATASET_SUBDIR_PATH,
+        n_samples=N_SAMPLES,
+        n_fd_points=N_FD_POINTS,
+        n_profile_features=N_PROFILE_FEATURES,
+        theta=THETA,
+        val_frac=VAL_FRAC,
+        test_frac=TEST_FRAC,
+        seed=SEED,
+    )
+    train_data = ds["train"]["constant"]
+
 history = {}
 if RUN_TRAINING:
     t0 = time.time()
