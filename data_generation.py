@@ -95,14 +95,20 @@ def shape_no_leak_split(C, n_train, n_val, n_test, theta=0.99):
 
     # 3. Train = everything with no twin in test or val.
     max_sim_to_ood = C[:, ood].max(axis=1)
-    train = (np.arange(N)[max_sim_to_ood <= theta]).tolist()
-    train = [i for i in train if i not in set(ood)]
-    if not train:
-        raise RuntimeError("No training sample survives the no-twin filter; "
-                           "lower theta, shrink val/test, or enlarge the pool.")
+    candidates = np.arange(N)[max_sim_to_ood <= theta]
+    candidates = candidates[~np.isin(candidates, np.asarray(ood))]
+    if len(candidates) < n_train:
+        raise RuntimeError(
+            f"Only {len(candidates)} training samples survive the no-twin filter, "
+            f"but n_train={n_train}; lower theta, shrink val/test, or enlarge the pool."
+        )
+    # Prefer samples closest to the central shape. This makes cardinality
+    # deterministic while retaining the most representative training family.
+    train = candidates[np.argsort(d[candidates])[:n_train]].tolist()
 
-    dropped = [int(i) for i in range(N)
-               if i not in set(train) and i not in set(ood)]
+    train_set = set(train)
+    ood_set = set(ood)
+    dropped = [int(i) for i in range(N) if i not in train_set and i not in ood_set]
 
     stats = {
         "n_pool": N,
@@ -115,6 +121,69 @@ def shape_no_leak_split(C, n_train, n_val, n_test, theta=0.99):
     return {"train": train, "val": val, "test": test,
             "dropped": {"train": dropped, "val": [], "test": []},
             "stats": stats}
+
+
+def shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
+                                  theta=0.99, block_size=1024):
+    """Memory-scalable no-twin split directly from bubble arrays.
+
+    Unlike :func:`shape_no_leak_split`, this function never stores the full
+    pool similarity matrix. It still performs the exact same pairwise
+    comparison, but keeps only row centralities and train/OOD maxima.
+    """
+    if block_size < 1:
+        raise ValueError("block_size must be positive")
+    if not modes:
+        raise ValueError("at least one bubble mode is required")
+    n = len(pool[modes[0]]["b"])
+    normalized = []
+    for mode in modes:
+        b = np.asarray(pool[mode]["b"], dtype=float)
+        xi = np.asarray(pool[mode]["xi"], dtype=float)
+        weights = np.empty(xi.size)
+        weights[0] = 0.5 * (xi[1] - xi[0])
+        weights[-1] = 0.5 * (xi[-1] - xi[-2])
+        weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+        norms = np.sqrt(np.maximum(np.sum(b * b * weights, axis=1), 1e-30))
+        normalized.append((b * np.sqrt(weights)) / norms[:, None])
+
+    centrality = np.zeros(n)
+    for start in range(0, n, block_size):
+        stop = min(start + block_size, n)
+        sim = None
+        for vec in normalized:
+            block_sim = vec[start:stop] @ vec.T
+            sim = block_sim if sim is None else np.maximum(sim, block_sim)
+        centrality[start:stop] = sim.mean(axis=1)
+    centroid = int(np.argmax(centrality))
+    similarity_to_centroid = np.full(n, -np.inf)
+    for mode, vec in zip(modes, normalized):
+        similarity_to_centroid = np.maximum(similarity_to_centroid, vec @ vec[centroid])
+    distances = 1.0 - similarity_to_centroid
+    order = np.argsort(-distances)
+    test = order[:n_test].tolist()
+    val = order[n_test:n_test + n_val].tolist()
+    ood = val + test
+
+    max_sim_to_ood = np.full(n, -np.inf)
+    for start in range(0, n, block_size):
+        stop = min(start + block_size, n)
+        block_max = None
+        for vec in normalized:
+            sims = vec[start:stop] @ vec[ood].T
+            block_max = sims.max(axis=1) if block_max is None else np.maximum(block_max, sims.max(axis=1))
+        max_sim_to_ood[start:stop] = block_max
+    candidates = np.flatnonzero(max_sim_to_ood <= theta)
+    candidates = candidates[~np.isin(candidates, np.asarray(ood))]
+    if len(candidates) < n_train:
+        raise RuntimeError(f"Only {len(candidates)} training samples survive the no-twin filter, "
+                           f"but n_train={n_train}")
+    train = candidates[np.argsort(distances[candidates])[:n_train]].tolist()
+    train_set, ood_set = set(train), set(ood)
+    dropped = [int(i) for i in range(n) if i not in train_set and i not in ood_set]
+    return {"train": train, "val": val, "test": test, "dropped": {"train": dropped, "val": [], "test": []},
+            "stats": {"n_pool": n, "theta": theta, "n_train": len(train),
+                      "n_val": len(val), "n_test": len(test), "dropped": {"train": len(dropped), "val": 0, "test": 0}}}
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +307,14 @@ def main():
     print("\n" + "=" * 72)
     print("STEP 2 — Bubble cosine-similarity analysis of the pool")
     print("=" * 72)
-    C = pool_similarity_matrix(pool, modes)
+    # Full NxN diagnostics are intentionally limited to a deterministic
+    # subsample; the split itself below is blockwise and exact.
+    sample_idx = np.arange(min(n, 1000))
+    sample_pool = {
+        m: {k: (v if k == "xi" else v[sample_idx]) for k, v in pool[m].items()}
+        for m in modes
+    }
+    C = pool_similarity_matrix(sample_pool, modes)
     od = _off_diagonal_stats(C)
     er = _effective_rank(C)
     print(f"  pool off-diagonal similarity: mean={od['mean']:.4f}  "
@@ -257,7 +333,8 @@ def main():
     n_train = int(round(args.train_frac * n))
     n_val = int(round(args.val_frac * n))
     n_test = int(round(args.test_frac * n))
-    split = shape_no_leak_split(C, n_train, n_val, n_test, theta=args.theta)
+    split = shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
+                                          theta=args.theta)
     st = split["stats"]
     print(f"  target: {n_train} train / {n_val} val / {n_test} test")
     print(f"  after leak filter: {st['n_train']} train / {st['n_val']} val / "

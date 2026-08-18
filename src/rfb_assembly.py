@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import sparse
 
 from src.mesh import Mesh1D
 from src.quadrature import GaussLegendre
@@ -8,7 +9,7 @@ from src.rfb_bubble import KANBubble1D, MultiKANBubble1D
 from src.rfb_local import reference_p1_basis, local_parameters
 
 
-def _apply_dirichlet_zero(A: np.ndarray, f: np.ndarray):
+def _apply_dirichlet_zero(A, f: np.ndarray):
     for idx in [0, A.shape[0] - 1]:
         A[idx, :] = 0.0
         A[:, idx] = 0.0
@@ -52,9 +53,10 @@ def assemble_classical_system(
     quad: GaussLegendre,
     pde: AdvectionDiffusion1D,
     apply_bc: bool = True,
+    sparse_output: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     N = mesh.n_nodes
-    A = np.zeros((N, N), dtype=float)
+    A = sparse.lil_matrix((N, N), dtype=float) if sparse_output else np.zeros((N, N), dtype=float)
     f = np.zeros(N, dtype=float)
 
     xi_ref = 0.5 * (quad.ref_points + 1.0)
@@ -92,7 +94,7 @@ def assemble_classical_system(
 
     if apply_bc:
         _apply_dirichlet_zero(A, f)
-    return A, f
+    return (A.tocsr() if sparse_output else A), f
 
 
 def local_enriched_matrices(
@@ -154,9 +156,10 @@ def assemble_rfb_condensed_system(
     pde: AdvectionDiffusion1D,
     bubble: KANBubble1D | MultiKANBubble1D,
     apply_bc: bool = True,
+    sparse_output: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, list[dict]]:
     N = mesh.n_nodes
-    A_global = np.zeros((N, N), dtype=float)
+    A_global = sparse.lil_matrix((N, N), dtype=float) if sparse_output else np.zeros((N, N), dtype=float)
     F_global = np.zeros(N, dtype=float)
     local_data = []
 
@@ -170,9 +173,10 @@ def assemble_rfb_condensed_system(
         F_L = F_e[:2]
         F_b = F_e[2:]
 
-        inv_A_bb = np.linalg.inv(A_bb)
-        A_cond = A_LL - A_Lb @ inv_A_bb @ A_bL
-        F_cond = F_L - (A_Lb @ inv_A_bb @ F_b).reshape(2)
+        # Solve local systems directly; forming an inverse is less stable and
+        # needlessly expensive, especially for larger bubble spaces.
+        A_cond = A_LL - A_Lb @ np.linalg.solve(A_bb, A_bL)
+        F_cond = F_L - (A_Lb @ np.linalg.solve(A_bb, F_b)).reshape(2)
         dofs = mesh.element_dofs(e)
         for i, gi in enumerate(dofs):
             F_global[gi] += F_cond[i]
@@ -192,7 +196,7 @@ def assemble_rfb_condensed_system(
 
     if apply_bc:
         _apply_dirichlet_zero(A_global, F_global)
-    return A_global, F_global, local_data
+    return (A_global.tocsr() if sparse_output else A_global), F_global, local_data
 
 
 def recover_bubble_coefficients(coeffs: np.ndarray, mesh: Mesh1D, local_data: list[dict]) -> np.ndarray:

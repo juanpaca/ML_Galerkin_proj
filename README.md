@@ -186,6 +186,11 @@ train–test similarity ≈ 0.98) even though the train set itself is redundant
 `rfb_5k_frame` dataset, by contrast, shows **100%** of test bubbles with a
 train twin and is kept only for comparison.
 
+Similarity uses trapezoidal quadrature. Cross-split maximum similarities and
+the production no-twin split are computed blockwise, so they do not require a
+full `N × N` matrix. Request `return_matrices=True` only for small diagnostic
+datasets.
+
 ---
 
 ## 3. Training
@@ -201,10 +206,14 @@ model = MultiKANBubble1D(n_bubbles=2, n_hidden=10, n_grid=8, spline_order=3)
 model.to(device)     # 960 params total (480 per mode)
 ```
 
+For large one-dimensional FEM systems, pass `sparse_output=True` to
+`assemble_classical_system` or `assemble_rfb_condensed_system` to receive a
+CSR matrix. Dense output remains the compatibility default.
+
 ### Train both modes
 
 ```python
-from src.dataset_generation import train_multi_bubble_on_dataset
+from src.training import train_multi_bubble_on_dataset
 
 histories = train_multi_bubble_on_dataset(
     model, ds["train"],

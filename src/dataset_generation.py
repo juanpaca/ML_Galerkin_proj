@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import warnings
+import hashlib
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -49,7 +50,9 @@ from src.rfb_training import (
     DTYPE,
 )
 
-warnings.filterwarnings("ignore")
+# Do not alter the warning policy of applications importing this module.
+
+DATASET_SCHEMA_VERSION = 1
 
 # ---------------------------------------------------------------------------
 # Parameter sampling strategies
@@ -1117,7 +1120,7 @@ def save_dataset(
     -------
     str : path to the metadata JSON file.
     """
-    metadata = dataset["metadata"]
+    metadata = dict(dataset["metadata"])
     if name is None:
         name = metadata.get("name") or "rfb_dataset"
     base = Path(DATASET_SUBDIR)
@@ -1128,16 +1131,24 @@ def save_dataset(
     mode_names = dataset.get("mode_names", metadata.get("mode_names", []))
     split_names = [k for k in ("train", "val", "test") if k in dataset]
 
+    file_hashes = {}
     for sname in split_names:
         for mname in mode_names:
             data = dataset[sname].get(mname)
             if data is None:
                 continue
             path = base / f"{name}_{sname}_{mname}.npz"
-            np.savez_compressed(str(path), **{
+            arrays = {
                 k: v for k, v in data.items() if isinstance(v, np.ndarray)
-            })
+            }
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            np.savez_compressed(str(tmp_path), **arrays)
+            tmp_npz = Path(str(tmp_path) + ".npz")
+            tmp_npz.replace(path)
+            file_hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
 
+    metadata["schema_version"] = DATASET_SCHEMA_VERSION
+    metadata["file_hashes"] = file_hashes
     metadata_path = base / f"{name}_metadata.json"
     _save_metadata(metadata, metadata_path)
 
@@ -1171,6 +1182,8 @@ def load_dataset(
 
     metadata_path = base / f"{name}_metadata.json"
     metadata = _load_metadata(metadata_path)
+    if metadata.get("schema_version", 0) > DATASET_SCHEMA_VERSION:
+        raise ValueError("dataset schema is newer than this library")
 
     scaler = None
     scaler_path = base / f"{name}_scaler.json"
@@ -1189,7 +1202,24 @@ def load_dataset(
             if not path.exists():
                 continue
             data = dict(np.load(str(path)))
+            expected_hash = metadata.get("file_hashes", {}).get(path.name)
+            if expected_hash is not None:
+                actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual_hash != expected_hash:
+                    raise ValueError(f"dataset file checksum mismatch: {path.name}")
+            lengths = {len(v) for k, v in data.items() if k not in ("xi", "input_scaled") and np.ndim(v) > 0}
+            if lengths and len(lengths) != 1:
+                raise ValueError(f"inconsistent array lengths in {path.name}")
             dataset[sname][mname] = data
+
+    for sname, split in dataset.items():
+        if sname not in split_names:
+            continue
+        if not split:
+            continue
+        mode_lengths = {m: len(v["pe"]) for m, v in split.items()}
+        if len(set(mode_lengths.values())) != 1:
+            raise ValueError(f"mode lengths differ in split {sname}: {mode_lengths}")
 
     return dataset
 
@@ -1284,8 +1314,18 @@ def bubble_gram_matrix(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
         Symmetric positive semidefinite Gram matrix.
     """
     b = np.asarray(b_array, dtype=float)
-    dx = float(np.mean(np.diff(xi)))
-    return (b @ b.T) * dx
+    xi = np.asarray(xi, dtype=float)
+    if b.ndim != 2 or xi.ndim != 1 or b.shape[1] != xi.size:
+        raise ValueError("b_array must have shape (N, len(xi))")
+    if xi.size < 2 or not np.all(np.isfinite(b)) or not np.all(np.isfinite(xi)):
+        raise ValueError("bubble data must be finite and contain at least two grid points")
+    if np.any(np.diff(xi) <= 0):
+        raise ValueError("xi must be strictly increasing")
+    weights = np.empty(xi.size, dtype=float)
+    weights[0] = 0.5 * (xi[1] - xi[0])
+    weights[-1] = 0.5 * (xi[-1] - xi[-2])
+    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+    return (b * weights) @ b.T
 
 
 def bubble_cosine_similarity(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
@@ -1313,6 +1353,45 @@ def bubble_cosine_similarity(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
     return np.clip(C, -1.0, 1.0)
 
 
+def max_cross_similarity(
+    other: np.ndarray,
+    reference: np.ndarray,
+    xi: np.ndarray,
+    block_size: int = 1024,
+) -> np.ndarray:
+    """Return each ``other`` row's maximum cosine similarity to ``reference``.
+
+    The calculation is blockwise and therefore avoids materializing an
+    ``len(other) x len(reference)`` matrix.  This is the production primitive
+    for leakage audits and large no-twin splits.
+    """
+    other = np.asarray(other, dtype=float)
+    reference = np.asarray(reference, dtype=float)
+    if block_size < 1:
+        raise ValueError("block_size must be positive")
+    xi = np.asarray(xi, dtype=float)
+    if xi.ndim != 1 or xi.size < 2 or np.any(np.diff(xi) <= 0):
+        raise ValueError("xi must be a strictly increasing one-dimensional grid")
+    weights = np.empty(xi.size, dtype=float)
+    weights[0] = 0.5 * (xi[1] - xi[0])
+    weights[-1] = 0.5 * (xi[-1] - xi[-2])
+    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+    if other.ndim != 2 or reference.ndim != 2 or other.shape[1] != reference.shape[1]:
+        raise ValueError("bubble arrays must be two-dimensional with matching grids")
+    if other.shape[1] != xi.size or not np.all(np.isfinite(other)) or not np.all(np.isfinite(reference)):
+        raise ValueError("bubble arrays must be finite and match xi")
+    other_n = np.sqrt(np.maximum(np.sum(other * other * weights, axis=1), 1e-30))
+    ref_n = np.sqrt(np.maximum(np.sum(reference * reference * weights, axis=1), 1e-30))
+    out = np.empty(other.shape[0], dtype=float)
+    reference_weighted = reference * weights
+    for start in range(0, other.shape[0], block_size):
+        stop = min(start + block_size, other.shape[0])
+        sims = (other[start:stop] @ reference_weighted.T)
+        sims /= other_n[start:stop, None] * ref_n[None, :]
+        out[start:stop] = np.clip(sims, -1.0, 1.0).max(axis=1)
+    return out
+
+
 def _off_diagonal_stats(C: np.ndarray) -> dict[str, float]:
     """Summary statistics of the strictly off-diagonal entries of C."""
     n = C.shape[0]
@@ -1331,6 +1410,43 @@ def _off_diagonal_stats(C: np.ndarray) -> dict[str, float]:
         "min": float(vals.min()),
         "max": float(vals.max()),
         "frac_gt_0.90": float(np.mean(vals > 0.90)),
+        "frac_gt_0.95": float(np.mean(vals > 0.95)),
+        "frac_gt_0.99": float(np.mean(vals > 0.99)),
+        "n_pairs": int(vals.size),
+    }
+
+
+def _off_diagonal_stats_blockwise(
+    b: np.ndarray, xi: np.ndarray, block_size: int = 1024
+) -> dict[str, float]:
+    """Compute off-diagonal cosine statistics without an NxN matrix."""
+    if block_size < 1:
+        raise ValueError("block_size must be positive")
+    b = np.asarray(b, dtype=float)
+    xi = np.asarray(xi, dtype=float)
+    if b.ndim != 2 or xi.ndim != 1 or b.shape[1] != xi.size or xi.size < 2:
+        raise ValueError("bubble data must have shape (N, len(xi))")
+    n = b.shape[0]
+    if n < 2:
+        return _off_diagonal_stats(np.empty((1, 1)))
+    weights = np.empty(len(xi), dtype=float)
+    weights[0] = 0.5 * (xi[1] - xi[0])
+    weights[-1] = 0.5 * (xi[-1] - xi[-2])
+    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+    norms = np.sqrt(np.maximum(np.sum(b * b * weights, axis=1), 1e-30))
+    values = []
+    weighted = b * weights
+    for start in range(0, n, block_size):
+        stop = min(start + block_size, n)
+        block = (b[start:stop] @ weighted.T) / norms[start:stop, None] / norms[None, :]
+        rows = np.arange(start, stop)
+        block[rows - start, rows] = np.nan
+        values.append(block[~np.isnan(block)])
+    vals = np.concatenate(values)
+    return {
+        "mean": float(vals.mean()), "median": float(np.median(vals)),
+        "std": float(vals.std()), "min": float(vals.min()),
+        "max": float(vals.max()), "frac_gt_0.90": float(np.mean(vals > 0.90)),
         "frac_gt_0.95": float(np.mean(vals > 0.95)),
         "frac_gt_0.99": float(np.mean(vals > 0.99)),
         "n_pairs": int(vals.size),
@@ -1373,6 +1489,7 @@ def bubble_similarity_analysis(
     n_eig_samples: int = 500,
     seed: int = 0,
     return_matrices: bool = False,
+    block_size: int = 1024,
     verbose: bool = True,
 ) -> dict[str, Any]:
     """Analyze bubble redundancy and train/test leakage via L2 similarities.
@@ -1437,9 +1554,8 @@ def bubble_similarity_analysis(
         xi = np.asarray(dataset[sname][mode]["xi"], dtype=float)
         split_arrays[sname] = (b, xi)
 
-        C = bubble_cosine_similarity(b, xi)
         within = {"n_samples": b.shape[0]}
-        within["off_diagonal"] = _off_diagonal_stats(C)
+        within["off_diagonal"] = _off_diagonal_stats_blockwise(b, xi, block_size)
 
         n = b.shape[0]
         n_sub = min(n, n_eig_samples)
@@ -1448,7 +1564,7 @@ def bubble_similarity_analysis(
         within["effective_rank"] = _effective_rank(C_sub)
 
         if return_matrices:
-            within["C"] = C
+            within["C"] = bubble_cosine_similarity(b, xi)
         result["within"][sname] = within
 
     if ref_split in split_arrays:
@@ -1457,13 +1573,9 @@ def bubble_similarity_analysis(
             if sname == ref_split:
                 continue
             # Cross Gram: rows = non-train samples, cols = reference samples.
-            dx = float(np.mean(np.diff(xi_ref)))
-            G_cross = (b @ B_ref.T) * dx
-            d_ref = np.sqrt(np.clip(np.diag(bubble_gram_matrix(B_ref, xi_ref)), 1e-30, None))
-            d_oth = np.sqrt(np.clip(np.diag(bubble_gram_matrix(b, xi)), 1e-30, None))
-            C_cross = G_cross / np.outer(d_oth, d_ref)
-            C_cross = np.clip(C_cross, -1.0, 1.0)
-            max_sim = C_cross.max(axis=1)
+            # The normal production path computes only nearest similarities.
+            # Full cross matrices remain available explicitly for diagnostics.
+            max_sim = max_cross_similarity(b, B_ref, xi_ref, block_size=block_size)
             stats = {
                 "n_other": b.shape[0],
                 "max_sim_mean": float(max_sim.mean()),
@@ -1476,7 +1588,14 @@ def bubble_similarity_analysis(
             }
             entry: dict[str, Any] = {"max_similarity": max_sim, "stats": stats}
             if return_matrices:
-                entry["C"] = C_cross
+                weights = np.empty(xi_ref.size, dtype=float)
+                weights[0] = 0.5 * (xi_ref[1] - xi_ref[0])
+                weights[-1] = 0.5 * (xi_ref[-1] - xi_ref[-2])
+                weights[1:-1] = 0.5 * (xi_ref[2:] - xi_ref[:-2])
+                d_ref = np.sqrt(np.maximum(np.sum(B_ref * B_ref * weights, axis=1), 1e-30))
+                d_oth = np.sqrt(np.maximum(np.sum(b * b * weights, axis=1), 1e-30))
+                C_cross = (b @ (B_ref * weights).T) / np.outer(d_oth, d_ref)
+                entry["C"] = np.clip(C_cross, -1.0, 1.0)
             result["cross"][f"{ref_split}_vs_{sname}"] = entry
 
     if verbose:
@@ -1569,7 +1688,9 @@ def train_bubble_on_dataset(
     -------
     list[float] : loss history.
     """
-    if device is not None:
+    if device is None:
+        device = next(model.parameters()).device
+    else:
         model.to(device)
     N = len(mode_data["pe"])
     xi_base = torch.linspace(0.0, 1.0, n_quad, dtype=torch.float32)
@@ -1679,7 +1800,9 @@ def train_multi_bubble_on_dataset(
     -------
     dict[str, list[float]] : loss history per mode.
     """
-    if device is not None:
+    if device is None:
+        device = next(model.parameters()).device
+    else:
         model.to(device)
     histories = {}
     for i, mname in enumerate(mode_names):

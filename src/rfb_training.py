@@ -305,15 +305,15 @@ def train_bubble_model(
             else:
                 eps_ratios_t = None
             pred = model(xi, pe, rho, eps_ratios=eps_ratios_t)
-            dpred = torch.autograd.grad(
-                pred, xi, torch.ones_like(pred), create_graph=True
-            )[0]
-
             b_target, db_target = interpolate_target(sample, xi_np)
             b_t = torch.tensor(b_target, dtype=torch.float32)
             db_t = torch.tensor(db_target, dtype=torch.float32)
             total = total + torch.mean((pred - b_t) ** 2)
-            total = total + grad_weight * torch.mean((dpred - db_t) ** 2)
+            if grad_weight > 0.0:
+                dpred = torch.autograd.grad(
+                    pred, xi, torch.ones_like(pred), create_graph=True
+                )[0]
+                total = total + grad_weight * torch.mean((dpred - db_t) ** 2)
             if max_principle_weight > 0.0:
                 lower = float(np.min(b_target))
                 upper = float(np.max(b_target))

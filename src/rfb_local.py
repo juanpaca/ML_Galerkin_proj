@@ -12,13 +12,27 @@ def _solve_tridiagonal(
 
     Returns x of length n.
     """
+    sub = np.asarray(sub, dtype=float)
+    main = np.asarray(main, dtype=float)
+    sup = np.asarray(sup, dtype=float)
+    rhs = np.asarray(rhs, dtype=float)
     n = len(main)
+    if n < 1 or sub.size != n - 1 or sup.size != n - 1 or rhs.size != n:
+        raise ValueError("invalid tridiagonal system dimensions")
+    if not all(np.all(np.isfinite(a)) for a in (sub, main, sup, rhs)):
+        raise ValueError("tridiagonal system contains non-finite values")
+    scale = max(1.0, float(np.max(np.abs(main))))
+    pivot_tol = 100.0 * np.finfo(float).eps * scale
+    if abs(main[0]) <= pivot_tol:
+        raise np.linalg.LinAlgError("zero or unstable tridiagonal pivot")
     cp = np.zeros(n - 1)
     dp = np.zeros(n)
     cp[0] = sup[0] / main[0]
     dp[0] = rhs[0] / main[0]
     for i in range(1, n):
         denom = main[i] - sub[i - 1] * cp[i - 1]
+        if abs(denom) <= pivot_tol:
+            raise np.linalg.LinAlgError("zero or unstable tridiagonal pivot")
         if i < n - 1:
             cp[i] = sup[i] / denom
         dp[i] = (rhs[i] - sub[i - 1] * dp[i - 1]) / denom
@@ -38,8 +52,10 @@ def reference_p1_basis(xi: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def local_parameters(eps: float, beta: float, sigma: float, h: float) -> tuple[float, float]:
-    pe = abs(beta) * h / (2.0 * eps) if eps > 0.0 else np.inf
-    rho = sigma * h * h / eps if eps > 0.0 else np.inf
+    if not np.all(np.isfinite([eps, beta, sigma, h])) or eps <= 0.0 or h <= 0.0:
+        raise ValueError("eps and h must be positive finite values")
+    pe = abs(beta) * h / (2.0 * eps)
+    rho = sigma * h * h / eps
     return pe, rho
 
 
@@ -81,6 +97,10 @@ def solve_reference_rfb(
     """
     if n_points < 5:
         raise ValueError("n_points must be at least 5")
+    if not np.isfinite(h) or h <= 0.0:
+        raise ValueError("h must be a positive finite value")
+    if not np.isfinite(beta) or not np.isfinite(sigma):
+        raise ValueError("beta and sigma must be finite")
     xi = np.linspace(0.0, 1.0, n_points)
     dxi = xi[1] - xi[0]
     interior = xi[1:-1]
@@ -101,12 +121,16 @@ def solve_reference_rfb(
 
     eps_arr = np.asarray(eps, dtype=float)
     if eps_arr.ndim == 0:
+        if not np.isfinite(eps_arr) or eps_arr <= 0.0:
+            raise ValueError("eps must be a positive finite value")
         eps_interior = np.full(n, eps_arr)
     else:
         if len(eps_arr) != n_points:
             raise ValueError(
                 f"eps array length {len(eps_arr)} != n_points {n_points}"
             )
+        if not np.all(np.isfinite(eps_arr)) or np.any(eps_arr <= 0.0):
+            raise ValueError("eps profile must contain positive finite values")
         eps_interior = np.interp(interior, xi, eps_arr)
 
     diff = eps_interior / (h * h)
@@ -130,8 +154,7 @@ def solve_reference_rfb(
 
     center = np.interp(0.5, xi, b)
     if abs(center) < 1e-14:
-        b_norm = b
-        db_norm = db
+        raise np.linalg.LinAlgError("bubble midpoint is too small to normalize")
     else:
         b_norm = b / center
         db_norm = db / center
