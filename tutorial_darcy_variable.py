@@ -45,8 +45,8 @@ import matplotlib.pyplot as plt
 from data_generation_darcy_variable import generate_and_save_dataset
 from src.darcy_variable import PiecewiseDiffusion, solve_darcy_1d
 from src.dataset_generation import bubble_similarity_analysis, load_dataset
-from src.rfb_bubble import KANBubble1D
-from src.training import train_bubble_on_dataset
+from src.rfb_bubble import MultiKANBubble1D
+from src.training import train_multi_bubble_on_dataset
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATASET_NAME = "darcy_piecewise"
@@ -186,7 +186,8 @@ if not NO_PLOTS:
 # ## 5. Build the KAN Model
 
 # %%
-model = KANBubble1D(
+model = MultiKANBubble1D(
+    n_bubbles=2,
     n_hidden=N_HIDDEN,
     n_grid=N_GRID,
     n_eps=train_data["eps_ratios"].shape[1],
@@ -201,12 +202,13 @@ print(f"Training samples: {len(train_data['pe'])}")
 # profile. The gradient term is disabled, as in the stable training workflow.
 
 # %%
-history = []
+history = {}
 if RUN_TRAINING:
     t0 = time.time()
-    history = train_bubble_on_dataset(
+    history = train_multi_bubble_on_dataset(
         model,
-        train_data,
+        ds["train"],
+        mode_names=("constant", "xi"),
         n_epochs=N_EPOCHS,
         batch_size=BATCH_SIZE,
         lr=LEARNING_RATE,
@@ -247,7 +249,7 @@ if not NO_PLOTS:
 # ## 8. Test on Train, Validation, and Leak-Free Test Shapes
 
 # %%
-def evaluate_split(data):
+def evaluate_split(data, mode_index):
     model.eval()
     n, q = len(data["b"]), len(data["xi"])
     xi_t = torch.tensor(data["xi"], dtype=torch.float32, device=DEVICE)
@@ -257,7 +259,7 @@ def evaluate_split(data):
     eps = torch.tensor(data["eps_ratios"], dtype=torch.float32, device=DEVICE)
     eps_flat = eps.unsqueeze(1).expand(-1, q, -1).reshape(n * q, -1)
     with torch.no_grad():
-        prediction = model(
+        prediction = model.bubbles[mode_index](
             xi_flat, pe_flat, rho_flat, eps_ratios=eps_flat,
         ).reshape(n, q)
     target = torch.tensor(data["b"], dtype=torch.float32, device=DEVICE)
@@ -272,31 +274,40 @@ def evaluate_split(data):
 
 errors = {}
 for split_name in ("train", "val", "test"):
-    prediction, rmse, relative_l2 = evaluate_split(ds[split_name]["constant"])
-    errors[split_name] = {
-        "prediction": prediction,
-        "rmse": rmse,
-        "relative_l2": relative_l2,
-    }
-    print(f"{split_name:>5}: mean RMSE={rmse.mean():.4e}, "
-          f"mean relative L2={relative_l2.mean():.4e}, "
-          f"worst relative L2={relative_l2.max():.4e}")
+    errors[split_name] = {}
+    for mode_index, mode_name in enumerate(("constant", "xi")):
+        prediction, rmse, relative_l2 = evaluate_split(
+            ds[split_name][mode_name], mode_index,
+        )
+        errors[split_name][mode_name] = {
+            "prediction": prediction,
+            "rmse": rmse,
+            "relative_l2": relative_l2,
+        }
+        print(f"{split_name:>5} / {mode_name:>8}: mean RMSE={rmse.mean():.4e}, "
+              f"mean relative L2={relative_l2.mean():.4e}, "
+              f"worst relative L2={relative_l2.max():.4e}")
 
 if not NO_PLOTS:
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    for split_name, color in {"train": "C0", "val": "C1", "test": "C3"}.items():
-        data = ds[split_name]["constant"]
-        axes[0].scatter(data["eps_ratios"][:, 0], errors[split_name]["rmse"],
-                        s=8, alpha=0.35, color=color, label=split_name)
-        axes[1].hist(errors[split_name]["relative_l2"], bins=40, alpha=0.4,
-                     color=color, label=split_name)
-    axes[0].set_title("Per-sample RMSE")
-    axes[0].set_xlabel("left profile feature")
-    axes[0].set_ylabel("RMSE")
-    axes[1].set_title("Relative L2 error")
-    axes[1].set_xlabel("relative L2")
-    axes[0].legend()
-    axes[1].legend()
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    for col, mode_name in enumerate(("constant", "xi")):
+        for split_name, color in {"train": "C0", "val": "C1", "test": "C3"}.items():
+            data = ds[split_name][mode_name]
+            axes[0, col].scatter(
+                data["eps_ratios"][:, 0], errors[split_name][mode_name]["rmse"],
+                s=8, alpha=0.35, color=color, label=split_name,
+            )
+            axes[1, col].hist(
+                errors[split_name][mode_name]["relative_l2"], bins=40,
+                alpha=0.4, color=color, label=split_name,
+            )
+        axes[0, col].set_title(f"{mode_name}: per-sample RMSE")
+        axes[0, col].set_xlabel("left profile feature")
+        axes[0, col].set_ylabel("RMSE")
+        axes[1, col].set_title(f"{mode_name}: relative L2 error")
+        axes[1, col].set_xlabel("relative L2")
+        axes[0, col].legend()
+        axes[1, col].legend()
     fig.tight_layout()
     plt.show()
 
@@ -305,21 +316,25 @@ if not NO_PLOTS:
 
 # %%
 representatives = [("train", 0), ("train", -1), ("test", 0), ("test", -1)]
-for split_name, index in representatives:
-    data = ds[split_name]["constant"]
-    i = index if index >= 0 else len(data["b"]) + index
-    rel = errors[split_name]["relative_l2"][i]
-    print(f"{split_name}[{i}] relative L2 error = {rel:.4e}")
+for mode_name in ("constant", "xi"):
+    for split_name, index in representatives:
+        data = ds[split_name][mode_name]
+        i = index if index >= 0 else len(data["b"]) + index
+        rel = errors[split_name][mode_name]["relative_l2"][i]
+        print(f"{mode_name:>8} {split_name}[{i}] relative L2 error = {rel:.4e}")
 
 if not NO_PLOTS:
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex=True)
-    for ax, (split_name, index) in zip(axes.flat, representatives):
-        data = ds[split_name]["constant"]
-        i = index if index >= 0 else len(data["b"]) + index
-        ax.plot(xi, data["b"][i], "k--", label="reference FD")
-        ax.plot(xi, errors[split_name]["prediction"][i], "C3", label="KAN")
-        ax.set_title(f"{split_name}[{i}]")
-        ax.grid(True, alpha=0.3)
+    fig, axes = plt.subplots(2, 4, figsize=(16, 7), sharex=True)
+    for row, mode_name in enumerate(("constant", "xi")):
+        for col, (split_name, index) in enumerate(representatives):
+            data = ds[split_name][mode_name]
+            i = index if index >= 0 else len(data["b"]) + index
+            ax = axes[row, col]
+            ax.plot(xi, data["b"][i], "k--", label="reference FD")
+            ax.plot(xi, errors[split_name][mode_name]["prediction"][i],
+                    "C3", label="KAN")
+            ax.set_title(f"{mode_name}, {split_name}[{i}]")
+            ax.grid(True, alpha=0.3)
     axes[0, 0].legend()
     fig.supxlabel("xi")
     fig.supylabel("normalized solution")
@@ -335,26 +350,29 @@ if not NO_PLOTS:
 
 # %%
 if not NO_PLOTS:
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex=True)
+    fig, axes = plt.subplots(2, 4, figsize=(16, 7), sharex=True)
     piece_edges = ds["metadata"]["piece_edges"]
     piece_values = ds["metadata"]["piece_values"]
     split_indices = ds["metadata"]["split_indices"]
-    for ax, (split_name, index) in zip(axes.flat, representatives):
-        data = ds[split_name]["constant"]
+    for row, mode_name in enumerate(("constant", "xi")):
+      for col, (split_name, index) in enumerate(representatives):
+        data = ds[split_name][mode_name]
         i = index if index >= 0 else len(data["b"]) + index
         pool_index = split_indices[split_name][i]
         profile = PiecewiseDiffusion(
             np.asarray(piece_edges[pool_index]),
             np.asarray(piece_values[pool_index]),
         )
-        reference = solve_darcy_1d(
-            profile, length=float(data["length"][i]), n_points=len(xi),
-        )
-        predicted = errors[split_name]["prediction"][i] * reference["center"]
+        source = 1.0 if mode_name == "constant" else lambda x, L=float(data["length"][i]): x / L
+        reference = solve_darcy_1d(profile, length=float(data["length"][i]),
+                                   source=source, n_points=len(xi))
+        predicted = (errors[split_name][mode_name]["prediction"][i]
+                     * reference["center"])
         x = reference["x"]
+        ax = axes[row, col]
         ax.plot(x, reference["u"], "k--", label="reference FD")
         ax.plot(x, predicted, "C3", label="KAN shape + reference scale")
-        ax.set_title(f"{split_name}[{i}]")
+        ax.set_title(f"{mode_name}, {split_name}[{i}]")
         ax.grid(True, alpha=0.3)
     axes[0, 0].legend()
     fig.supxlabel("x")

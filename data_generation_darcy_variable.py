@@ -41,23 +41,26 @@ def build_split_dataset(
     n_train = None if train_frac is None else int(round(train_frac * n))
     n_val = int(round(val_frac * n))
     n_test = int(round(test_frac * n))
+    mode_names = tuple(pool.get("mode_names", ("constant", "xi")))
     split = shape_no_leak_split_from_pool(
-        {"constant": pool["constant"]}, ("constant",),
+        {mode: pool[mode] for mode in mode_names}, mode_names,
         n_train, n_val, n_test, theta=theta,
     )
 
-    dataset = {"mode_names": ["constant"], "metadata": dict(pool["metadata"])}
+    dataset = {"mode_names": list(mode_names), "metadata": dict(pool["metadata"])}
     for split_name in ("train", "val", "test"):
         idx = np.asarray(split[split_name], dtype=int)
-        dataset[split_name] = {"constant": {}}
-        for key, values in pool["constant"].items():
-            dataset[split_name]["constant"][key] = (
-                values if key == "xi" else values[idx]
-            )
+        dataset[split_name] = {}
+        for mode in mode_names:
+            dataset[split_name][mode] = {}
+            for key, values in pool[mode].items():
+                dataset[split_name][mode][key] = (
+                    values if key == "xi" else values[idx]
+                )
 
     dataset["metadata"].update({
         "name": "darcy_piecewise",
-        "mode_names": ["constant"],
+        "mode_names": list(mode_names),
         "split_strategy": "no_twin_shape",
         "similarity_theta": theta,
         "n_total": n,
@@ -101,11 +104,17 @@ def generate_and_save_dataset(
     dataset = build_split_dataset(pool, theta, val_frac, test_frac, train_frac)
     save_dataset(dataset, name=name, subdir=subdir)
     loaded = load_dataset(name, subdir=subdir)
-    report = bubble_similarity_analysis(loaded, mode="constant", verbose=False)
-    max_similarity = report["cross"]["train_vs_test"]["max_similarity"]
+    reports = {
+        mode: bubble_similarity_analysis(loaded, mode=mode, verbose=False)
+        for mode in loaded["mode_names"]
+    }
+    max_similarity = np.maximum.reduce([
+        report["cross"]["train_vs_test"]["max_similarity"]
+        for report in reports.values()
+    ])
     if np.any(max_similarity > theta):
         raise RuntimeError("Darcy train/test leakage audit failed")
-    loaded["leakage_report"] = report
+    loaded["leakage_report"] = reports
     return loaded
 
 
@@ -140,7 +149,7 @@ def main():
         train_frac=args.train_frac,
         seed=args.seed,
     )
-    stats = ds["leakage_report"]["cross"]["train_vs_test"]["stats"]
+    stats = ds["leakage_report"]["constant"]["cross"]["train_vs_test"]["stats"]
     print(f"Saved datasets/{DATA_SUBDIR}/{args.name}_*.npz")
     print(f"Splits: {stats['n_other']} test samples; "
           f"max train-test similarity={stats['max_sim_max']:.6f}")

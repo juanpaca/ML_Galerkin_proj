@@ -145,13 +145,26 @@ def generate_darcy_pool(
     rng = np.random.default_rng(seed)
     lengths = rng.uniform(*length_range, n_samples)
     xi = np.linspace(0.0, 1.0, n_fd_points)
-    b, db, ratios, profiles, edges, values = [], [], [], [], [], []
+    mode_data = {
+        "constant": {"b": [], "db": []},
+        "xi": {"b": [], "db": []},
+    }
+    ratios, profiles, edges, values = [], [], [], []
     for i in range(n_samples):
         profile = random_piecewise_diffusion(rng, eps_range=eps_range,
                                               n_pieces_range=n_pieces_range)
-        sol = solve_darcy_1d(profile, length=float(lengths[i]), n_points=n_fd_points)
-        b.append(sol["u_norm"])
-        db.append(sol["du_norm"])
+        sol_constant = solve_darcy_1d(
+            profile, length=float(lengths[i]), source=1.0,
+            n_points=n_fd_points,
+        )
+        sol_xi = solve_darcy_1d(
+            profile, length=float(lengths[i]),
+            source=lambda x, L=float(lengths[i]): x / L,
+            n_points=n_fd_points,
+        )
+        for mode, sol in (("constant", sol_constant), ("xi", sol_xi)):
+            mode_data[mode]["b"].append(sol["u_norm"])
+            mode_data[mode]["db"].append(sol["du_norm"])
         ratios.append(profile_features(profile, n_profile_features))
         profiles.append(sol["eps"])
         edges.append(profile.edges)
@@ -160,20 +173,25 @@ def generate_darcy_pool(
     # Variable piece counts cannot form a rectangular edge/value array; retain
     # them as metadata-friendly object arrays while the fixed profile samples
     # are the model features.
-    mode = {
+    common = {
         "pe": np.zeros(n_samples, dtype=np.float32),
         "rho": np.zeros(n_samples, dtype=np.float32),
         "length": lengths.astype(np.float32),
-        "b": np.asarray(b, dtype=np.float32),
-        "db": np.asarray(db, dtype=np.float32),
         "eps_ratios": np.asarray(ratios, dtype=np.float32),
         "eps_profile": np.asarray(profiles, dtype=np.float32),
         "xi": xi.astype(np.float32),
         "idx": np.arange(n_samples, dtype=np.int64),
     }
+    modes = {}
+    for mode_name in ("constant", "xi"):
+        modes[mode_name] = {
+            **common,
+            "b": np.asarray(mode_data[mode_name]["b"], dtype=np.float32),
+            "db": np.asarray(mode_data[mode_name]["db"], dtype=np.float32),
+        }
     return {
-        "constant": mode,
-        "mode_names": ("constant",),
+        **modes,
+        "mode_names": ("constant", "xi"),
         "piece_edges": edges,
         "piece_values": values,
         "metadata": {

@@ -232,6 +232,8 @@ def test_darcy_pool_is_reproducible_and_has_fixed_features():
                                  n_profile_features=5, seed=13)
     a = pool_a["constant"]
     b = pool_b["constant"]
+    assert pool_a["mode_names"] == ("constant", "xi")
+    assert pool_a["xi"]["b"].shape == (12, 41)
     assert a["b"].shape == (12, 41)
     assert a["eps_ratios"].shape == (12, 5)
     assert np.allclose(a["b"], b["b"])
