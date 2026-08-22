@@ -103,10 +103,14 @@ class KANBubble1D(nn.Module):
         spline_order: int = 3,
         delta: float = 1e-4,
         n_eps: int = 0,
+        eps_transform: str = "log",
     ):
         super().__init__()
         self.delta = delta
         self.n_eps = n_eps
+        if eps_transform not in ("log", "linear", "none"):
+            raise ValueError(f"unknown eps_transform: {eps_transform}")
+        self.eps_transform = eps_transform
         n_in = 3 + n_eps
 
         self.kan = nn.Sequential(
@@ -135,9 +139,18 @@ class KANBubble1D(nn.Module):
             eps_ratios = torch.as_tensor(eps_ratios, dtype=xi.dtype, device=xi.device)
             if eps_ratios.dim() == 1:
                 eps_ratios = eps_ratios.expand(xi.shape[0], -1)
-            if eps_ratios.shape[0] != xi.shape[0] or not torch.isfinite(eps_ratios).all() or (eps_ratios <= 0).any():
-                raise ValueError("eps_ratios must be positive finite profile samples")
-            eps_s = torch.log(eps_ratios) / 6.0
+            if eps_ratios.shape[0] != xi.shape[0] or not torch.isfinite(eps_ratios).all():
+                raise ValueError("eps features must be finite and match the xi batch")
+            if self.eps_transform == "log":
+                if (eps_ratios <= 0).any():
+                    raise ValueError("eps_ratios must be positive for the log transform")
+                eps_s = torch.log(eps_ratios) / 6.0
+            elif self.eps_transform == "linear":
+                if (eps_ratios < -1e-6).any() or (eps_ratios > 1.0 + 1e-6).any():
+                    raise ValueError("eps features must lie in [0, 1] for the linear transform")
+                eps_s = 2.0 * torch.clamp(eps_ratios, 0.0, 1.0) - 1.0
+            else:
+                eps_s = eps_ratios
             scaled = torch.cat([scaled, eps_s], dim=-1)
         return scaled
 

@@ -130,6 +130,68 @@ def profile_features(profile: PiecewiseDiffusion, n_features: int) -> np.ndarray
     return values / mean
 
 
+def cumulative_resistivity_features(
+    profile: PiecewiseDiffusion,
+    n_features: int,
+    n_eval: int | None = None,
+) -> np.ndarray:
+    """Normalized cumulative-resistivity CDF R(x) = I0(x)/I0(1).
+
+    I0(x) = int_0^x dxi / epsilon(xi) is the only profile functional the
+    Darcy solution depends on (up to source moments obtained from I0 by
+    integration by parts). A thin resistive layer appears as a jump in R
+    regardless of its width, so this representation does not alias narrow
+    layers the way point samples of epsilon do. R is monotone on [0, 1]
+    and invariant to rescaling of epsilon.
+    """
+    if n_features < 1:
+        raise ValueError("n_features must be positive")
+    if n_eval is None:
+        n_eval = max(801, 8 * n_features)
+    xi = np.linspace(0.0, 1.0, n_eval)
+    resistivity = 1.0 / profile.evaluate(xi)
+    increments = 0.5 * (resistivity[1:] + resistivity[:-1]) * np.diff(xi)
+    integral = np.concatenate(([0.0], np.cumsum(increments)))
+    total = integral[-1]
+    if not np.isfinite(total) or total <= 0.0:
+        raise ValueError("degenerate resistivity integral")
+    cdf = integral / total
+    nodes, _ = np.polynomial.legendre.leggauss(n_features)
+    xi_nodes = 0.5 * (nodes + 1.0)
+    return np.clip(np.interp(xi_nodes, xi, cdf), 1e-12, 1.0)
+
+
+def scaled_combo_features(
+    profile: PiecewiseDiffusion,
+    n_features: int,
+) -> np.ndarray:
+    """Log-scaled Gauss ratios concatenated with the resistivity CDF.
+
+    Both blocks are pre-mapped to [-1, 1] so the model can consume them
+    with ``eps_transform="none"``: log10(eps/eps_mean)/3 captures smooth
+    profile variation, while 2R - 1 preserves thin-layer jumps.
+    """
+    gauss = profile_features(profile, n_features)
+    cdf = cumulative_resistivity_features(profile, n_features)
+    gauss_scaled = np.clip(np.log10(gauss) / 3.0, -1.0, 1.0)
+    return np.concatenate([gauss_scaled, 2.0 * cdf - 1.0])
+
+
+def make_profile_features(
+    profile: PiecewiseDiffusion,
+    n_features: int,
+    feature_kind: str = "gauss_ratio",
+) -> np.ndarray:
+    """Dispatch profile-feature computation by kind."""
+    if feature_kind == "gauss_ratio":
+        return profile_features(profile, n_features)
+    if feature_kind == "resistivity_cdf":
+        return cumulative_resistivity_features(profile, n_features)
+    if feature_kind == "scaled_combo":
+        return scaled_combo_features(profile, n_features)
+    raise ValueError(f"unknown feature_kind: {feature_kind}")
+
+
 def generate_darcy_pool(
     n_samples: int = 5000,
     n_fd_points: int = 801,
@@ -138,6 +200,7 @@ def generate_darcy_pool(
     eps_range: tuple[float, float] = (0.1, 100.0),
     n_pieces_range: tuple[int, int] = (2, 8),
     seed: int = 42,
+    feature_kind: str = "gauss_ratio",
 ) -> dict:
     """Generate a deterministic pool of piecewise-diffusion Darcy shapes."""
     if n_samples < 1:
@@ -165,7 +228,7 @@ def generate_darcy_pool(
         for mode, sol in (("constant", sol_constant), ("xi", sol_xi)):
             mode_data[mode]["b"].append(sol["u_norm"])
             mode_data[mode]["db"].append(sol["du_norm"])
-        ratios.append(profile_features(profile, n_profile_features))
+        ratios.append(make_profile_features(profile, n_profile_features, feature_kind))
         profiles.append(sol["eps"])
         edges.append(profile.edges)
         values.append(profile.values)
@@ -200,6 +263,7 @@ def generate_darcy_pool(
             "n_samples": n_samples,
             "n_fd_points": n_fd_points,
             "n_profile_features": n_profile_features,
+            "feature_kind": feature_kind,
             "length_range": list(length_range),
             "eps_range": list(eps_range),
             "n_pieces_range": list(n_pieces_range),

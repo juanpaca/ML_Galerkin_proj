@@ -90,6 +90,7 @@ def generate_and_save_dataset(
     test_frac: float = 0.25,
     train_frac: float | None = None,
     seed: int = 42,
+    feature_kind: str = "gauss_ratio",
 ) -> dict:
     """Generate, split, save, reload, and audit a Darcy dataset."""
     pool = generate_darcy_pool(
@@ -100,8 +101,10 @@ def generate_and_save_dataset(
         eps_range=(0.1, 100.0),
         n_pieces_range=(min_pieces, max_pieces),
         seed=seed,
+        feature_kind=feature_kind,
     )
     dataset = build_split_dataset(pool, theta, val_frac, test_frac, train_frac)
+    dataset["metadata"]["name"] = name
     save_dataset(dataset, name=name, subdir=subdir)
     loaded = load_dataset(name, subdir=subdir)
     reports = {
@@ -133,6 +136,9 @@ def main():
     parser.add_argument("--test-frac", type=float, default=0.25)
     parser.add_argument("--train-frac", type=float, default=None)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--feature-kind",
+                        choices=("gauss_ratio", "resistivity_cdf", "scaled_combo"),
+                        default="gauss_ratio")
     args = parser.parse_args()
 
     ds = generate_and_save_dataset(
@@ -148,6 +154,7 @@ def main():
         test_frac=args.test_frac,
         train_frac=args.train_frac,
         seed=args.seed,
+        feature_kind=args.feature_kind,
     )
     stats = ds["leakage_report"]["constant"]["cross"]["train_vs_test"]["stats"]
     print(f"Saved datasets/{DATA_SUBDIR}/{args.name}_*.npz")

@@ -22,14 +22,16 @@
 import os
 import sys
 
-if os.path.isdir("/content") and not os.path.isdir("/content/ML_Galerkin_proj"):
-    os.system("git clone https://github.com/juanpaca/ML_Galerkin_proj.git "
-              "/content/ML_Galerkin_proj")
-if os.path.isdir("/content/ML_Galerkin_proj"):
-    os.system("git -C /content/ML_Galerkin_proj pull")
-    sys.path.insert(0, "/content/ML_Galerkin_proj")
-else:
-    sys.path.insert(0, ".")
+# Local run: Colab clone/pull disabled.
+# if os.path.isdir("/content") and not os.path.isdir("/content/ML_Galerkin_proj"):
+#     os.system("git clone https://github.com/juanpaca/ML_Galerkin_proj.git "
+#               "/content/ML_Galerkin_proj")
+# if os.path.isdir("/content/ML_Galerkin_proj"):
+#     os.system("git -C /content/ML_Galerkin_proj pull")
+#     sys.path.insert(0, "/content/ML_Galerkin_proj")
+# else:
+#     sys.path.insert(0, ".")
+sys.path.insert(0, ".")
 
 # %% [markdown]
 # ## 1. Imports and Experiment Configuration
@@ -49,7 +51,6 @@ from src.rfb_bubble import MultiKANBubble1D
 from src.training import train_multi_bubble_on_dataset
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATASET_NAME = "darcy_piecewise"
 DATASET_SUBDIR = "data_darcy_variable"
 DATASET_ROOT = (
     "/content/ML_Galerkin_proj/datasets"
@@ -57,27 +58,35 @@ DATASET_ROOT = (
     else "datasets"
 )
 DATASET_SUBDIR_PATH = os.path.join(DATASET_ROOT, DATASET_SUBDIR)
-MODEL_PATH = Path("models/darcy_variable_kan.pt")
 
 # Set these before running the cells.
-GENERATE_DATA = False       # True regenerates the 5,000-profile dataset.
-RUN_TRAINING = True         # Set False to inspect/test an existing checkpoint.
+GENERATE_DATA = False       # True regenerates the dataset pool.
+RUN_TRAINING = True          # Set False to inspect/test an existing checkpoint.
 NO_PLOTS = False
 
-N_SAMPLES = 5000
+# Profile-diversity controls for the piecewise diffusion pools.
+DATASET_NAME = "darcy_piecewise_combo20k"
+MIN_PIECES = 2
+MAX_PIECES = 16
+MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
+FEATURE_KIND = "scaled_combo"      # profile summary fed to the KAN
+EPS_TRANSFORM = "none"             # features are pre-scaled to [-1, 1]
+
+N_SAMPLES = 20000
 N_FD_POINTS = 801
-N_PROFILE_FEATURES = 8
+N_PROFILE_FEATURES = 24
 THETA = 0.99
 VAL_FRAC = 0.15
 TEST_FRAC = 0.25
 SEED = 42
 
-N_EPOCHS = 700
+N_EPOCHS = 1400
 BATCH_SIZE = 256
 TRAIN_QUAD = 160
 LEARNING_RATE = 1e-3
-N_HIDDEN = 16
-N_GRID = 8
+LR_SCHEDULER = "cosine"
+N_HIDDEN = 32
+N_GRID = 12
 
 print(f"Using device: {DEVICE}")
 
@@ -97,7 +106,7 @@ def sync():
 metadata_path = Path(DATASET_SUBDIR_PATH) / f"{DATASET_NAME}_metadata.json"
 dataset_needs_generation = GENERATE_DATA or not metadata_path.exists()
 if not dataset_needs_generation:
-    existing = load_dataset(os.path.join(DATASET_SUBDIR_PATH, DATASET_NAME))
+    existing = load_dataset(DATASET_NAME, subdir=DATASET_SUBDIR)
     dataset_needs_generation = not all(
         mode in existing.get("train", {}) for mode in ("constant", "xi")
     )
@@ -107,14 +116,17 @@ if not dataset_needs_generation:
 if dataset_needs_generation:
     ds = generate_and_save_dataset(
         name=DATASET_NAME,
-        subdir=DATASET_SUBDIR_PATH,
+        subdir=DATASET_SUBDIR,
         n_samples=N_SAMPLES,
         n_fd_points=N_FD_POINTS,
         n_profile_features=N_PROFILE_FEATURES,
+        min_pieces=MIN_PIECES,
+        max_pieces=MAX_PIECES,
         theta=THETA,
         val_frac=VAL_FRAC,
         test_frac=TEST_FRAC,
         seed=SEED,
+        feature_kind=FEATURE_KIND,
     )
 else:
     ds = existing
@@ -200,6 +212,7 @@ model = MultiKANBubble1D(
     n_hidden=N_HIDDEN,
     n_grid=N_GRID,
     n_eps=train_data["eps_ratios"].shape[1],
+    eps_transform=EPS_TRANSFORM,
 ).to(DEVICE)
 print(f"KAN parameters: {sum(p.numel() for p in model.parameters())}")
 print(f"Training samples: {len(train_data['pe'])}")
@@ -217,14 +230,17 @@ if not all(mode in ds.get("train", {}) for mode in ("constant", "xi")):
     print("Stale single-mode dataset detected before training; regenerating.")
     ds = generate_and_save_dataset(
         name=DATASET_NAME,
-        subdir=DATASET_SUBDIR_PATH,
+        subdir=DATASET_SUBDIR,
         n_samples=N_SAMPLES,
         n_fd_points=N_FD_POINTS,
         n_profile_features=N_PROFILE_FEATURES,
+        min_pieces=MIN_PIECES,
+        max_pieces=MAX_PIECES,
         theta=THETA,
         val_frac=VAL_FRAC,
         test_frac=TEST_FRAC,
         seed=SEED,
+        feature_kind=FEATURE_KIND,
     )
     train_data = ds["train"]["constant"]
 
@@ -242,6 +258,7 @@ if RUN_TRAINING:
         n_quad=TRAIN_QUAD,
         verbose=True,
         device=DEVICE,
+        lr_scheduler=LR_SCHEDULER,
     )
     sync()
     print(f"Training time: {time.time() - t0:.1f} s")
@@ -261,10 +278,12 @@ else:
 if not NO_PLOTS:
     plt.figure(figsize=(6, 4))
     if history:
-        plt.semilogy(history)
-        plt.title(f"Darcy KAN training loss: {history[-1]:.4e}")
+        for mode_name, losses in history.items():
+            plt.semilogy(losses, label=mode_name)
+        plt.title(f"Darcy KAN training loss: {min(min(v) for v in history.values()):.4e}")
         plt.xlabel("epoch")
         plt.ylabel("value MSE")
+        plt.legend()
     else:
         plt.text(0.5, 0.5, "training skipped", ha="center", va="center")
     plt.grid(True, alpha=0.3)
@@ -275,27 +294,33 @@ if not NO_PLOTS:
 # ## 8. Test on Train, Validation, and Leak-Free Test Shapes
 
 # %%
-def evaluate_split(data, mode_index):
+def evaluate_split(data, mode_index, chunk_size=64):
     model.eval()
     n, q = len(data["b"]), len(data["xi"])
     xi_t = torch.tensor(data["xi"], dtype=torch.float32, device=DEVICE)
-    xi_flat = xi_t.unsqueeze(0).expand(n, -1).reshape(-1)
-    pe_flat = torch.zeros(n * q, dtype=torch.float32, device=DEVICE)
-    rho_flat = torch.zeros(n * q, dtype=torch.float32, device=DEVICE)
     eps = torch.tensor(data["eps_ratios"], dtype=torch.float32, device=DEVICE)
-    eps_flat = eps.unsqueeze(1).expand(-1, q, -1).reshape(n * q, -1)
+    prediction = np.empty((n, q), dtype=np.float32)
     with torch.no_grad():
-        prediction = model.bubbles[mode_index](
-            xi_flat, pe_flat, rho_flat, eps_ratios=eps_flat,
-        ).reshape(n, q)
-    target = torch.tensor(data["b"], dtype=torch.float32, device=DEVICE)
-    error = prediction - target
-    rmse = torch.sqrt(torch.mean(error * error, dim=1)).cpu().numpy()
+        for start in range(0, n, chunk_size):
+            stop = min(start + chunk_size, n)
+            m = stop - start
+            xi_flat = xi_t.unsqueeze(0).expand(m, -1).reshape(-1)
+            pe_flat = torch.zeros(m * q, dtype=torch.float32, device=DEVICE)
+            rho_flat = torch.zeros(m * q, dtype=torch.float32, device=DEVICE)
+            eps_flat = eps[start:stop].unsqueeze(1).expand(-1, q, -1).reshape(m * q, -1)
+            pred = model.bubbles[mode_index](
+                xi_flat, pe_flat, rho_flat, eps_ratios=eps_flat,
+            ).reshape(m, q)
+            prediction[start:stop] = pred.cpu().numpy()
+    target = torch.tensor(data["b"], dtype=torch.float32)
+    pred_t = torch.tensor(prediction)
+    error = pred_t - target
+    rmse = torch.sqrt(torch.mean(error * error, dim=1)).numpy()
     relative_l2 = (
         torch.linalg.vector_norm(error, dim=1) /
         torch.clamp(torch.linalg.vector_norm(target, dim=1), min=1e-12)
-    ).cpu().numpy()
-    return prediction.cpu().numpy(), rmse, relative_l2
+    ).numpy()
+    return prediction, rmse, relative_l2
 
 
 errors = {}

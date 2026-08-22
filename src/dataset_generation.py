@@ -1673,6 +1673,7 @@ def train_bubble_on_dataset(
     n_quad: int = 80,
     verbose: bool = True,
     device: torch.device | None = None,
+    lr_scheduler: str | None = None,
 ) -> list[float]:
     """Train a bubble model from array-format dataset (batch mode).
 
@@ -1694,6 +1695,9 @@ def train_bubble_on_dataset(
         Print progress.
     device : torch.device or None
         Device for training.
+    lr_scheduler : str or None
+        Optional per-epoch learning-rate schedule. ``"cosine"`` uses
+        CosineAnnealingLR from ``lr`` down to ~0 over ``n_epochs``.
 
     Returns
     -------
@@ -1727,6 +1731,11 @@ def train_bubble_on_dataset(
         eps_ratios_all = _to_tensor(mode_data["eps_ratios"], device=device)  # (N, n_eps)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = None
+    if lr_scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
+    elif lr_scheduler is not None:
+        raise ValueError(f"unknown lr_scheduler: {lr_scheduler}")
     losses = []
 
     n_batches = max(1, (N + batch_size - 1) // batch_size)
@@ -1776,6 +1785,8 @@ def train_bubble_on_dataset(
 
         avg_loss = epoch_loss / n_processed
         losses.append(avg_loss)
+        if scheduler is not None:
+            scheduler.step()
         if verbose and (epoch + 1) % max(1, n_epochs // 10) == 0:
             print(f"  epoch {epoch + 1}/{n_epochs}: loss={avg_loss:.6e}")
 
@@ -1793,6 +1804,7 @@ def train_multi_bubble_on_dataset(
     n_quad: int = 80,
     verbose: bool = True,
     device: torch.device | None = None,
+    lr_scheduler: str | None = None,
 ) -> dict[str, list[float]]:
     """Train a multi-bubble model on all modes from a dataset split.
 
@@ -1829,6 +1841,7 @@ def train_multi_bubble_on_dataset(
             n_quad=n_quad,
             verbose=verbose,
             device=device,
+            lr_scheduler=lr_scheduler,
         )
         histories[mname] = history
     return histories
