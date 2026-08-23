@@ -29,23 +29,40 @@ def build_split_dataset(
     val_frac: float = 0.15,
     test_frac: float = 0.25,
     train_frac: float | None = None,
+    strategy: str = "no_twin_shape",
+    seed: int = 0,
 ) -> dict:
     """Split a Darcy pool by normalized solution shape.
 
-    By default, all samples that are not twins of validation/test shapes are
-    used for training. ``train_frac`` optionally requests a fixed target size.
+    ``strategy="no_twin_shape"`` (default) reserves validation/test as the
+    most atypical solution shapes and trains on everything that is not a
+    twin of them. ``strategy="random"`` draws an i.i.d. split instead
+    (diagnostic baseline). ``train_frac`` optionally requests a fixed size.
     """
     if val_frac < 0.0 or test_frac < 0.0 or val_frac + test_frac >= 1.0:
         raise ValueError("validation/test fractions must leave training samples")
+    if strategy not in ("no_twin_shape", "random"):
+        raise ValueError(f"unknown split strategy: {strategy}")
     n = len(pool["constant"]["pe"])
     n_train = None if train_frac is None else int(round(train_frac * n))
     n_val = int(round(val_frac * n))
     n_test = int(round(test_frac * n))
     mode_names = tuple(pool.get("mode_names", ("constant", "xi")))
-    split = shape_no_leak_split_from_pool(
-        {mode: pool[mode] for mode in mode_names}, mode_names,
-        n_train, n_val, n_test, theta=theta,
-    )
+    if strategy == "no_twin_shape":
+        split = shape_no_leak_split_from_pool(
+            {mode: pool[mode] for mode in mode_names}, mode_names,
+            n_train, n_val, n_test, theta=theta,
+        )
+    else:
+        rng = np.random.default_rng(seed)
+        perm = rng.permutation(n)
+        split = {
+            "test": perm[:n_test],
+            "val": perm[n_test:n_test + n_val],
+            "train": (perm[n_test + n_val:] if n_train is None
+                      else perm[n_test + n_val:n_test + n_val + n_train]),
+            "dropped": {"train": np.array([], dtype=int)},
+        }
 
     dataset = {"mode_names": list(mode_names), "metadata": dict(pool["metadata"])}
     for split_name in ("train", "val", "test"):
@@ -61,8 +78,8 @@ def build_split_dataset(
     dataset["metadata"].update({
         "name": "darcy_piecewise",
         "mode_names": list(mode_names),
-        "split_strategy": "no_twin_shape",
-        "similarity_theta": theta,
+        "split_strategy": strategy,
+        "similarity_theta": theta if strategy == "no_twin_shape" else None,
         "n_total": n,
         "n_train": len(split["train"]),
         "n_val": len(split["val"]),
@@ -91,6 +108,8 @@ def generate_and_save_dataset(
     train_frac: float | None = None,
     seed: int = 42,
     feature_kind: str = "gauss_ratio",
+    min_width: float = 0.0,
+    split_strategy: str = "no_twin_shape",
 ) -> dict:
     """Generate, split, save, reload, and audit a Darcy dataset."""
     pool = generate_darcy_pool(
@@ -102,8 +121,10 @@ def generate_and_save_dataset(
         n_pieces_range=(min_pieces, max_pieces),
         seed=seed,
         feature_kind=feature_kind,
+        min_width=min_width,
     )
-    dataset = build_split_dataset(pool, theta, val_frac, test_frac, train_frac)
+    dataset = build_split_dataset(pool, theta, val_frac, test_frac, train_frac,
+                                  strategy=split_strategy)
     dataset["metadata"]["name"] = name
     save_dataset(dataset, name=name, subdir=subdir)
     loaded = load_dataset(name, subdir=subdir)
@@ -139,6 +160,11 @@ def main():
     parser.add_argument("--feature-kind",
                         choices=("gauss_ratio", "resistivity_cdf", "scaled_combo"),
                         default="gauss_ratio")
+    parser.add_argument("--min-width", type=float, default=0.0,
+                        help="minimum piece measure on the normalized interval")
+    parser.add_argument("--split-strategy",
+                        choices=("no_twin_shape", "random"),
+                        default="no_twin_shape")
     args = parser.parse_args()
 
     ds = generate_and_save_dataset(
@@ -155,6 +181,8 @@ def main():
         train_frac=args.train_frac,
         seed=args.seed,
         feature_kind=args.feature_kind,
+        min_width=args.min_width,
+        split_strategy=args.split_strategy,
     )
     stats = ds["leakage_report"]["constant"]["cross"]["train_vs_test"]["stats"]
     print(f"Saved datasets/{DATA_SUBDIR}/{args.name}_*.npz")

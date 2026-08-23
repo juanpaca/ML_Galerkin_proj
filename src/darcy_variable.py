@@ -52,11 +52,21 @@ def random_piecewise_diffusion(
     n_pieces: int | None = None,
     eps_range: tuple[float, float] = (0.1, 100.0),
     n_pieces_range: tuple[int, int] = (2, 8),
+    min_width: float = 0.0,
 ) -> PiecewiseDiffusion:
-    """Generate a random positive piecewise profile with log-uniform values."""
+    """Generate a random positive piecewise profile with log-uniform values.
+
+    ``min_width`` enforces a minimum measure for every piece on the
+    normalized interval: gaps are a rescaled flat Dirichlet draw, so each
+    width lies in ``[min_width, 1 - (n-1)*min_width]``. This guarantees the
+    profile is resolved by both the FD grid and the feature samples
+    (requires ``n_pieces * min_width < 1``).
+    """
     lo, hi = map(float, eps_range)
     if lo <= 0.0 or hi <= lo:
         raise ValueError("eps_range must be positive and increasing")
+    if min_width < 0.0:
+        raise ValueError("min_width must be non-negative")
     if n_pieces is None:
         p_lo, p_hi = n_pieces_range
         if p_lo < 1 or p_hi < p_lo:
@@ -64,7 +74,14 @@ def random_piecewise_diffusion(
         n_pieces = int(rng.integers(p_lo, p_hi + 1))
     if n_pieces < 1:
         raise ValueError("n_pieces must be positive")
-    interior = np.sort(rng.uniform(0.0, 1.0, n_pieces - 1))
+    if n_pieces * min_width >= 1.0:
+        raise ValueError("n_pieces * min_width must stay below 1")
+    if min_width == 0.0:
+        interior = np.sort(rng.uniform(0.0, 1.0, n_pieces - 1))
+    else:
+        slack = 1.0 - n_pieces * min_width
+        gaps = min_width + slack * rng.dirichlet(np.ones(n_pieces))
+        interior = np.cumsum(gaps)[:-1]
     edges = np.concatenate(([0.0], interior, [1.0]))
     values = 10.0 ** rng.uniform(np.log10(lo), np.log10(hi), n_pieces)
     return PiecewiseDiffusion(edges, values)
@@ -201,6 +218,7 @@ def generate_darcy_pool(
     n_pieces_range: tuple[int, int] = (2, 8),
     seed: int = 42,
     feature_kind: str = "gauss_ratio",
+    min_width: float = 0.0,
 ) -> dict:
     """Generate a deterministic pool of piecewise-diffusion Darcy shapes."""
     if n_samples < 1:
@@ -215,7 +233,8 @@ def generate_darcy_pool(
     ratios, profiles, edges, values = [], [], [], []
     for i in range(n_samples):
         profile = random_piecewise_diffusion(rng, eps_range=eps_range,
-                                              n_pieces_range=n_pieces_range)
+                                              n_pieces_range=n_pieces_range,
+                                              min_width=min_width)
         sol_constant = solve_darcy_1d(
             profile, length=float(lengths[i]), source=1.0,
             n_points=n_fd_points,
@@ -267,6 +286,7 @@ def generate_darcy_pool(
             "length_range": list(length_range),
             "eps_range": list(eps_range),
             "n_pieces_range": list(n_pieces_range),
+            "min_width": min_width,
             "seed": seed,
             "normalization": "u/u(0.5L)",
         },

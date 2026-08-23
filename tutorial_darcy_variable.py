@@ -65,9 +65,10 @@ RUN_TRAINING = True          # Set False to inspect/test an existing checkpoint.
 NO_PLOTS = False
 
 # Profile-diversity controls for the piecewise diffusion pools.
-DATASET_NAME = "darcy_piecewise_combo20k"
+DATASET_NAME = "darcy_piecewise_combo_l8"
 MIN_PIECES = 2
-MAX_PIECES = 16
+MAX_PIECES = 7                      # capped by min piece measure L/8
+MIN_PIECE_WIDTH = 1.0 / 8.0         # smallest expected layer: L/8
 MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
 FEATURE_KIND = "scaled_combo"      # profile summary fed to the KAN
 EPS_TRANSFORM = "none"             # features are pre-scaled to [-1, 1]
@@ -127,6 +128,7 @@ if dataset_needs_generation:
         test_frac=TEST_FRAC,
         seed=SEED,
         feature_kind=FEATURE_KIND,
+        min_width=MIN_PIECE_WIDTH,
     )
 else:
     ds = existing
@@ -241,6 +243,7 @@ if not all(mode in ds.get("train", {}) for mode in ("constant", "xi")):
         test_frac=TEST_FRAC,
         seed=SEED,
         feature_kind=FEATURE_KIND,
+        min_width=MIN_PIECE_WIDTH,
     )
     train_data = ds["train"]["constant"]
 
