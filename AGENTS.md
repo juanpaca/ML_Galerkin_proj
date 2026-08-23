@@ -21,11 +21,15 @@ Key scripts:
 - `test_assembly_pipeline.py` — end‑to‑end assembly test (untrained KAN vs exact RFB)
 - `convergence_study.py` — convergence study (Classical/Exact RFB, `--train-kan` for KAN)
 - `tutorial_darcy_variable.py` — generate and audit the piecewise-diffusion Darcy dataset
+- `test_kan.py` — spline/KANLayer unit suite (40 checks vs scipy design matrix, gradients, endpoint folds)
 
 Training is done via the API (`train_multi_bubble_on_dataset` in
 `src/dataset_generation.py`) — see README section 3 and `tutorial.py` section 5.
-Optional args: `lr_scheduler="cosine"` (per-epoch cosine annealing), and
-`grad_weight` stays 0 for stability.
+Optional args: `lr_scheduler="cosine"` (per-epoch cosine annealing),
+`grad_weight` stays 0 for stability, and `energy_weight` adds
+0.01·∫ε|d(b̂−b_target)/dx|²dx via input-space central differences of values
+(same discrete operator on both sides; no second-order autograd; requires
+`eps_profile` in mode_data; default 0 = legacy behavior identical).
 
 ## Architecture
 
@@ -47,9 +51,10 @@ src/darcy_variable.py   piecewise epsilon profiles, conservative Darcy solver, d
 - **KAN1D** grid domain defaults to `[-1, 1]`. RFB bubbles always use `[0, 1]`.
 - **Static condensation**: bubble DOFs eliminated per-element via Schur complement.
 - **Residual modes**: `constant` (r̂₀=1), `xi` (r̂₁=ξ).
-- **Training**: value‑only MSE loss (gradient term `create_graph=True` diverges).
+- **Training**: value‑only MSE loss (gradient term `create_graph=True` diverges); optional `energy_weight` term uses FD derivatives of values only — stable.
 - **No‑twin split** (`data_generation.py`): test/val = farthest-from-typical bubble shapes, train = everything with similarity ≤ θ (=0.99) to all test/val bubbles; twins dropped. OOD by construction (not a cell/frame split).
 - **FD accuracy**: n_fd_points=400 under-resolves the Pe>50 boundary layer (~2 pts inside; 1.5–2% bubble error at Pe=100). Dataset regenerated at **n_fd_points=3200** → <0.4% error everywhere (validated vs `src/rfb_analytic.py`). No oscillating bubbles (upwind scheme is monotone).
+- **KAN spline degree convention** (`src/kan.py`): `k` = number of active bases ⇒ reproduced degree is k−1 (k=3 → quadratic). pykan/Blealtan use spline_order = degree, so their cubic is k=4 here. Endpoint folds in `KAN1D._eval_bspline_basis` and `KANLayer.b_splines` (src/rfb_bubble.py) make basis sums exact at x=x_min/x_max (one-hot last basis at the right edge); validated vs `scipy.interpolate.BSpline.design_matrix`.
 
 ## Dataset
 
@@ -66,13 +71,40 @@ Profile features fed to the KAN (`make_profile_features` in `src/darcy_variable.
 - `gauss_ratio` ε/ε̄: robust bulk behavior, but thin resistive layers alias → catastrophic tail failures (rel. L2 up to ~10×).
 - `resistivity_cdf` R(ξ)=I₀(ξ)/I₀(1): exact sufficient statistic (∝∫dξ/ε) — fixes extreme cases (train err 6.5%→2.1%) but *hurts* the bulk (monotone, highly-correlated inputs generalize worse mid-distribution).
 - `scaled_combo` (recommended): log-ratios ⊕ CDF, both pre-mapped to [−1,1]; consume with `eps_transform="none"`. Best on every metric: test mean rel L2 (constant/xi) 43%/34% vs ~50% single-view; worst case bounded at 2.35 vs 9.8+.
+- `scaled_combo_v2`: same but log-ratios divided by 4.0 instead of 3.0 — no clip saturation at contrast ~1000 (log10(827)/3 ≈ 0.97 was the failure mode); use for high-contrast regimes.
 
 Key facts:
 
 - Per-model error correlation across the two views is weak (~0.32): complementary failure modes are what make the combo input win. Blending two trained models does NOT help (cres is uniformly worse mid-bulk).
 - `KANBubble1D(n_eps, eps_transform="log"|"linear"|"none")` scales eps features; default `"log"` keeps legacy behavior. Models must be rebuilt with the same transform used at training.
-- 20k-pool runs use n_hidden=32, n_grid=12, 1400 epochs, cosine scheduler, value-only loss (~25 min/GPU). Datasets: `datasets/data_darcy_variable/darcy_piecewise_{rich20k,cres20k,combo20k}` share identical pools/splits/targets (features recomputed only); checkpoints in `models/*_kan.pt`.
+- 20k-pool runs use n_hidden=32, n_grid=12, 1400 epochs, cosine scheduler, value-only loss (~45 min/mode on GPU at 14k train samples). Datasets: `datasets/data_darcy_variable/darcy_piecewise_{rich20k,cres20k,combo20k}` share identical pools/splits/targets (features recomputed only); checkpoints in `models/*_kan.pt`.
 - Remaining headroom: moderate-contrast profiles where plain ratios beat CDF inputs; learned per-sample gating or extra capacity is the natural next step.
+
+### Contrast-band OOD split & data-scaling study
+
+`--split-strategy contrast_band` (seeded, quantile cut): i.i.d. pool with ε∈[0.01,10]
+(contrast c=εmax/εmin∈[1,1000]), train/val/test bands are contiguous contrast intervals
+(e.g. [1,430]/[430,598]/[598,998] for 70/15/15). Since rescaling ε leaves the normalized
+solution unchanged, contrast is *the* difficulty axis — a clean controlled OOD probe.
+Twin audit is skipped for non-`no_twin_shape` strategies (informational print only).
+
+Scaling curve (same recipe: scaled_combo_v2 + energy_weight=0.01, n_hidden=32,
+n_grid=12, 1400 epochs; identical val/test; test mean rel L2, constant mode):
+
+| n_train | test mean | median | p95 | time |
+|---|---|---|---|---|
+| 3.5k | 25.4% | 20.8% | 0.56 | 23 min |
+| 7k | 18.8% | 15.7% | 0.38 | 45 min |
+| 14k | 15.8% | 13.0% | 0.33 | 91 min |
+
+Takeaways: monotone power-law-ish scaling with diminishing returns past ~7–10k
+(standardize iteration on ~8k pools); train error also drops with n → genuine sample
+efficiency, not under-training. Error-vs-contrast is flat across the extrapolation range
+(median 0.115→0.138, Spearman 0.11) — graceful degradation held at 6× more data.
+Recipe tweaks (v2 features + energy loss) contributed little vs data quantity at equal n
+(3.5k arm ≈ old 5k baseline). Heavy tail worsened slightly with size (worst 1.4→3.9;
+p95 improved) — single-seed caveat, ±1–2%. Datasets:
+`darcy_piecewise_combo_cband{5k,20k_v2}`; checkpoints `models/darcy_piecewise_combo_cband*_kan.pt`.
 
 ## Assembler conventions
 

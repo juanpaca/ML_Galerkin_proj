@@ -1674,6 +1674,7 @@ def train_bubble_on_dataset(
     verbose: bool = True,
     device: torch.device | None = None,
     lr_scheduler: str | None = None,
+    energy_weight: float = 0.0,
 ) -> list[float]:
     """Train a bubble model from array-format dataset (batch mode).
 
@@ -1687,7 +1688,8 @@ def train_bubble_on_dataset(
     n_epochs, batch_size, lr : int, int, float
         Training hyperparameters.
     grad_weight : float
-        Weight for the gradient-matching loss term.
+        Weight for the gradient-matching loss term (autograd-based;
+        historically unstable, keep 0).
     n_quad : int
         Number of quadrature points (the target arrays are interpolated
         to this grid for each sample).
@@ -1698,6 +1700,12 @@ def train_bubble_on_dataset(
     lr_scheduler : str or None
         Optional per-epoch learning-rate schedule. ``"cosine"`` uses
         CosineAnnealingLR from ``lr`` down to ~0 over ``n_epochs``.
+    energy_weight : float
+        Weight for the Darcy energy-norm error term
+        ``∫ eps(x) |d(b_pred - b_target)/dx|^2 dx`` added to the value MSE.
+        Derivatives are input-space central differences of prediction and
+        target values (no second-order autograd graph), evaluated on the
+        interior quadrature nodes. Requires ``eps_profile`` in mode_data.
 
     Returns
     -------
@@ -1729,6 +1737,21 @@ def train_bubble_on_dataset(
     eps_ratios_all = None
     if "eps_ratios" in mode_data:
         eps_ratios_all = _to_tensor(mode_data["eps_ratios"], device=device)  # (N, n_eps)
+
+    eps_grid_all = None
+    trap_w_int = None
+    if energy_weight > 0.0:
+        if "eps_profile" not in mode_data:
+            raise ValueError("energy_weight > 0 requires 'eps_profile' in mode_data")
+        xi_src = np.asarray(mode_data["xi"], dtype=np.float64)
+        eps_np = np.empty((N, n_quad), dtype=DTYPE)
+        for i in range(N):
+            eps_np[i] = np.interp(xi_np, xi_src, mode_data["eps_profile"][i])
+        eps_grid_all = _to_tensor(eps_np, device=device)          # (N, Q)
+        h = float(xi_base[1] - xi_base[0])
+        w = np.full(n_quad, h, dtype=DTYPE)
+        w[0] = w[-1] = 0.5 * h
+        trap_w_int = _to_tensor(w[1:-1], device=device)           # (Q-2,)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = None
@@ -1777,6 +1800,19 @@ def train_bubble_on_dataset(
             loss = torch.mean((pred - b_t) ** 2)
             if grad_weight > 0.0:
                 loss = loss + grad_weight * torch.mean((dpred - db_t) ** 2)
+            if energy_weight > 0.0:
+                # Central input-space differences of prediction and target
+                # values: same discrete operator on both sides, no
+                # create_graph (the divergent legacy path is grad_weight).
+                h_q = float(xi_base[1] - xi_base[0])
+                dpred_fd = (pred[:, 2:] - pred[:, :-2]) / (2.0 * h_q)
+                dtarg_fd = (b_t[:, 2:] - b_t[:, :-2]) / (2.0 * h_q)
+                eps_b = eps_grid_all[idx][:, 1:-1]
+                energy = torch.sum(
+                    trap_w_int.unsqueeze(0) * eps_b * (dpred_fd - dtarg_fd) ** 2,
+                    dim=1,
+                )
+                loss = loss + energy_weight * torch.mean(energy)
             loss.backward()
             optimizer.step()
 
@@ -1805,6 +1841,7 @@ def train_multi_bubble_on_dataset(
     verbose: bool = True,
     device: torch.device | None = None,
     lr_scheduler: str | None = None,
+    energy_weight: float = 0.0,
 ) -> dict[str, list[float]]:
     """Train a multi-bubble model on all modes from a dataset split.
 
@@ -1842,6 +1879,7 @@ def train_multi_bubble_on_dataset(
             verbose=verbose,
             device=device,
             lr_scheduler=lr_scheduler,
+            energy_weight=energy_weight,
         )
         histories[mname] = history
     return histories

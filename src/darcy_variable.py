@@ -181,16 +181,21 @@ def cumulative_resistivity_features(
 def scaled_combo_features(
     profile: PiecewiseDiffusion,
     n_features: int,
+    log_scale: float = 3.0,
 ) -> np.ndarray:
     """Log-scaled Gauss ratios concatenated with the resistivity CDF.
 
     Both blocks are pre-mapped to [-1, 1] so the model can consume them
-    with ``eps_transform="none"``: log10(eps/eps_mean)/3 captures smooth
-    profile variation, while 2R - 1 preserves thin-layer jumps.
+    with ``eps_transform="none"``: log10(eps/eps_mean)/log_scale captures
+    smooth profile variation, while 2R - 1 preserves thin-layer jumps.
+
+    ``log_scale=3`` saturates the clip exactly at contrast ~1000 (the
+    classic failure mode of extrapolation regimes); pass ``4.0`` for
+    headroom ("scaled_combo_v2").
     """
     gauss = profile_features(profile, n_features)
     cdf = cumulative_resistivity_features(profile, n_features)
-    gauss_scaled = np.clip(np.log10(gauss) / 3.0, -1.0, 1.0)
+    gauss_scaled = np.clip(np.log10(gauss) / log_scale, -1.0, 1.0)
     return np.concatenate([gauss_scaled, 2.0 * cdf - 1.0])
 
 
@@ -206,6 +211,8 @@ def make_profile_features(
         return cumulative_resistivity_features(profile, n_features)
     if feature_kind == "scaled_combo":
         return scaled_combo_features(profile, n_features)
+    if feature_kind == "scaled_combo_v2":
+        return scaled_combo_features(profile, n_features, log_scale=4.0)
     raise ValueError(f"unknown feature_kind: {feature_kind}")
 
 

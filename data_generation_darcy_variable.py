@@ -186,7 +186,8 @@ def main():
     parser.add_argument("--train-frac", type=float, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--feature-kind",
-                        choices=("gauss_ratio", "resistivity_cdf", "scaled_combo"),
+                        choices=("gauss_ratio", "resistivity_cdf", "scaled_combo",
+                                 "scaled_combo_v2"),
                         default="gauss_ratio")
     parser.add_argument("--min-width", type=float, default=0.0,
                         help="minimum piece measure on the normalized interval")
