@@ -48,6 +48,17 @@ class KANLayer(nn.Module):
 
         bases = ((x_3d >= k_row[..., :-1]) & (x_3d < k_row[..., 1:])).to(x.dtype)
 
+        # Strict '<' leaves x == x_max with an all-zero seed row, silently
+        # dropping the spline term exactly at the right end of the domain.
+        # Fold that measure-zero case onto the last live interval so the
+        # basis forms a partition of unity on the closed domain. All other
+        # inputs keep their legacy values bit-for-bit.
+        if bool((x == self.knots[-1].to(x.dtype)).any()):
+            at_max = (x == self.knots[-1].to(x.dtype)).unsqueeze(-1).to(x.dtype)
+            fold = torch.zeros_like(bases)
+            fold[..., self.n_basis - 1] = 1.0
+            bases = bases + at_max * fold
+
         for deg in range(1, self.k):
             left_den = k_row[..., deg:-1] - k_row[..., :-(deg+1)] + 1e-12
             right_den = k_row[..., deg+1:] - k_row[..., 1:(-deg)] + 1e-12
@@ -89,7 +100,9 @@ class KANBubble1D(nn.Module):
     n_grid : int
         Number of B-spline grid intervals per edge function.
     spline_order : int
-        B-spline order (default 3 = cubic).
+        B-spline order (default 3 → quadratic splines, polynomial degree
+        k-1; pass 4 for cubic). NOTE: pykan/efficient-kan use the degree
+        as "spline_order", so their default cubic corresponds to k=4 here.
     delta : float
         Small offset in softplus to avoid division by zero.
     n_eps : int
