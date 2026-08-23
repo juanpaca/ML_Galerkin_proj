@@ -65,20 +65,21 @@ RUN_TRAINING = True          # Set False to inspect/test an existing checkpoint.
 NO_PLOTS = False
 
 # Profile-diversity controls for the piecewise diffusion pools.
-DATASET_NAME = "darcy_piecewise_combo_l8"
+DATASET_NAME = "darcy_piecewise_combo_cband5k"
 MIN_PIECES = 2
-MAX_PIECES = 7                      # capped by min piece measure L/8
-MIN_PIECE_WIDTH = 1.0 / 8.0         # smallest expected layer: L/8
+MAX_PIECES = 16
+MIN_PIECE_WIDTH = 0.0              # unconstrained piece widths (i.i.d. pool)
 MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
 FEATURE_KIND = "scaled_combo"      # profile summary fed to the KAN
 EPS_TRANSFORM = "none"             # features are pre-scaled to [-1, 1]
+SPLIT_STRATEGY = "contrast_band"   # contiguous bands of realized contrast
 
-N_SAMPLES = 20000
+N_SAMPLES = 5000
 N_FD_POINTS = 801
 N_PROFILE_FEATURES = 24
 THETA = 0.99
 VAL_FRAC = 0.15
-TEST_FRAC = 0.25
+TEST_FRAC = 0.15
 SEED = 42
 
 N_EPOCHS = 1400
@@ -129,6 +130,7 @@ if dataset_needs_generation:
         seed=SEED,
         feature_kind=FEATURE_KIND,
         min_width=MIN_PIECE_WIDTH,
+        split_strategy=SPLIT_STRATEGY,
     )
 else:
     ds = existing
@@ -160,7 +162,12 @@ print(f"Test twins above theta={THETA}: "
       f"{100*np.mean(max_train_test_similarity > THETA):.2f}%")
 print(f"Train effective rank: "
       f"{similarity['within']['train']['effective_rank']['effective_rank']:.3f}")
-assert not np.any(max_train_test_similarity > THETA)
+split_strategy = ds["metadata"].get("split_strategy", "no_twin_shape")
+if split_strategy == "no_twin_shape":
+    assert not np.any(max_train_test_similarity > THETA)
+else:
+    print(f"[info] split_strategy={split_strategy}: shape twins across splits are "
+          f"allowed by design; leakage guard skipped.")
 
 # %% [markdown]
 # ## 4. Visualize Diffusion Profiles, Solution Shapes, and Split Geometry
@@ -244,6 +251,7 @@ if not all(mode in ds.get("train", {}) for mode in ("constant", "xi")):
         seed=SEED,
         feature_kind=FEATURE_KIND,
         min_width=MIN_PIECE_WIDTH,
+        split_strategy=SPLIT_STRATEGY,
     )
     train_data = ds["train"]["constant"]
 
