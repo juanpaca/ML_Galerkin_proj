@@ -34,6 +34,7 @@ def _eval_bspline_basis(x: torch.Tensor, knots: torch.Tensor, k: int) -> torch.T
     nb = n_knots - k
     device = x.device
     dtype = x.dtype
+    knots = knots.to(device=device, dtype=dtype)
     x_c = x.contiguous()
 
     with torch.no_grad():
@@ -113,7 +114,7 @@ class KAN1D(nn.Module):
     def forward(self, x: torch.Tensor, precomputed_basis: torch.Tensor | None = None) -> torch.Tensor:
         if x.dim() == 2 and x.shape[1] == 1:
             x = x[:, 0]
-        x = x.flatten()
+        x = x.flatten().to(dtype=self.c.dtype)
         base = self.w_b * silu(x)
         if precomputed_basis is not None:
             spline = precomputed_basis @ self.c

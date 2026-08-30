@@ -22,6 +22,7 @@ Key scripts:
 - `convergence_study.py` — convergence study (Classical/Exact RFB, `--train-kan` for KAN)
 - `tutorial_darcy_variable.py` — generate and audit the piecewise-diffusion Darcy dataset
 - `test_kan.py` — spline/KANLayer unit suite (40 checks vs scipy design matrix, gradients, endpoint folds)
+- `tests/run_all.py` — one-command full test suite (runs the whole `tests/` dir): `venv/bin/python tests/run_all.py`
 
 Training is done via the API (`train_multi_bubble_on_dataset` in
 `src/dataset_generation.py`) — see README section 3 and `tutorial.py` section 5.
