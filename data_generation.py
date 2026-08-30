@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a leakage-free RFB dataset using cosine-similarity shape analysis.
+"""Generate a leakage-free RFB dataset using derivative-aware shape analysis.
 
 Improvement over the old ``data.py``. A purely geometric (Pe, rho) frame
 split leaks in *function space*: bubble shapes evolve continuously with
@@ -7,7 +7,10 @@ split leaks in *function space*: bubble shapes evolve continuously with
 (similarity > 0.99) and the test error can be "memorized". This script
 
   1. generates a large pool of bubbles (log-uniform in Pe x rho),
-  2. computes the L2 cosine-similarity matrix of the bubbles,
+  2. computes the H1 cosine-similarity matrix of the bubbles (values AND
+     derivative contributions: shapes that differ in boundary-layer
+     sharpness or oscillation are NOT considered twins even if their L2
+     mass overlaps),
   3. splits the pool by *shape* instead of by (Pe, rho):
        train = the dense central bulk of shape space,
        val/test = the bubbles farthest from that bulk,
@@ -30,6 +33,7 @@ import numpy as np
 from src.dataset_generation import (
     DatasetConfig,
     DataScaler,
+    _bubble_h1_features,
     bubble_cosine_similarity,
     bubble_similarity_analysis,
     _effective_rank,
@@ -127,12 +131,17 @@ def shape_no_leak_split(C, n_train, n_val, n_test, theta=0.99):
 
 
 def shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
-                                  theta=0.99, block_size=1024):
+                                  theta=0.99, lambda_deriv=0.2, block_size=1024):
     """Memory-scalable no-twin split directly from bubble arrays.
 
     Unlike :func:`shape_no_leak_split`, this function never stores the full
     pool similarity matrix. It still performs the exact same pairwise
     comparison, but keeps only row centralities and train/OOD maxima.
+
+    The similarity metric is the derivative-aware H1 cosine (values and
+    derivative contributions, see ``bubble_cosine_similarity``): shapes that
+    differ in their *changes* are not ``twin``-like even when they overlap
+    in L2 mass.  ``lambda_deriv=0`` reverts to the plain L2 cosine.
     """
     if block_size < 1:
         raise ValueError("block_size must be positive")
@@ -143,12 +152,9 @@ def shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
     for mode in modes:
         b = np.asarray(pool[mode]["b"], dtype=float)
         xi = np.asarray(pool[mode]["xi"], dtype=float)
-        weights = np.empty(xi.size)
-        weights[0] = 0.5 * (xi[1] - xi[0])
-        weights[-1] = 0.5 * (xi[-1] - xi[-2])
-        weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
-        norms = np.sqrt(np.maximum(np.sum(b * b * weights, axis=1), 1e-30))
-        normalized.append((b * np.sqrt(weights)) / norms[:, None])
+        V = _bubble_h1_features(b, xi, lambda_deriv)
+        norms = np.sqrt(np.maximum(np.sum(V * V, axis=1), 1e-30))
+        normalized.append(V / norms[:, None])
 
     centrality = np.zeros(n)
     for start in range(0, n, block_size):
@@ -294,6 +300,9 @@ def main():
     ap.add_argument("--rho-range", nargs=2, type=float, default=[0.2, 100.0])
     ap.add_argument("--theta", type=float, default=0.99,
                     help="twin-similarity threshold (default 0.99)")
+    ap.add_argument("--lambda-deriv", type=float, default=0.2,
+                    help="derivative-term weight of the H1 similarity metric "
+                         "(0 recovers plain L2 cosine; default 0.2)")
     ap.add_argument("--train-frac", type=float, default=0.60)
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--test-frac", type=float, default=0.25)
@@ -375,13 +384,15 @@ def main():
 
     # ---- 3. Shape-based no-leak split -----------------------------------
     print("\n" + "=" * 72)
-    print(f"STEP 3 — Shape-based split (theta = {args.theta})")
+    print(f"STEP 3 — Shape-based split (theta = {args.theta}, "
+          f"lambda_deriv = {args.lambda_deriv})")
     print("=" * 72)
     n_train = int(round(args.train_frac * n))
     n_val = int(round(args.val_frac * n))
     n_test = int(round(args.test_frac * n))
     split = shape_no_leak_split_from_pool(pool, modes, n_train, n_val, n_test,
-                                          theta=args.theta)
+                                          theta=args.theta,
+                                          lambda_deriv=args.lambda_deriv)
     st = split["stats"]
     print(f"  target: {n_train} train / {n_val} val / {n_test} test")
     print(f"  after leak filter: {st['n_train']} train / {st['n_val']} val / "
@@ -407,6 +418,7 @@ def main():
         },
         "split_strategy": "no_twin_shape",
         "similarity_theta": args.theta,
+        "similarity_lambda_deriv": args.lambda_deriv,
         "leak_dropped": st["dropped"],
         "split_by_shape": True,
     })

@@ -7,6 +7,7 @@ import pytest
 
 from data_generation import shape_no_leak_split, shape_no_leak_split_from_pool
 from src.dataset_generation import (
+    _bubble_h1_features,
     _pe_rho_cell,
     bubble_cosine_similarity,
     cell_based_split,
@@ -34,28 +35,52 @@ def _synth_pool(n, n_pts=101, rng=None):
     return pool
 
 
-def _trapezoid_weights(xi):
-    w = np.empty(xi.size)
-    w[0] = 0.5 * (xi[1] - xi[0])
-    w[-1] = 0.5 * (xi[-1] - xi[-2])
-    w[1:-1] = 0.5 * (xi[2:] - xi[:-2])
-    return w
-
-
-def _max_train_ood_sim(split, pool, theta):
+def _max_train_ood_sim(split, pool, theta, lambda_deriv=0.2):
     """Recompute the exact no-twin metric used inside the splitter."""
-    n_pts = pool["constant"]["xi"].size
-    weights = _trapezoid_weights(pool["constant"]["xi"])
     train = np.asarray(split["train"], dtype=int)
     ood = np.concatenate([np.asarray(split["val"], dtype=int),
                           np.asarray(split["test"], dtype=int)])
     worst = 0.0
     for mode in ("constant", "xi"):
         b = pool[mode]["b"]
-        norm = np.sqrt(np.maximum(np.sum(b ** 2 * weights, axis=1), 1e-30))
-        V = (b * np.sqrt(weights)) / norm[:, None]
+        xi = pool[mode]["xi"]
+        V = _bubble_h1_features(b, xi, lambda_deriv)
+        norms = np.sqrt(np.maximum(np.sum(V ** 2, axis=1), 1e-30))
+        V = V / norms[:, None]
         worst = max(worst, float((V[train] @ V[ood].T).max()))
     return worst
+
+
+def test_h1_metric_distinguishes_shapes_l2_calls_twins():
+    # Same bulk mass, but one bubble carries a thin boundary bump: under the
+    # plain L2 cosine they are "twins" (0.997); the H1 (derivative-aware)
+    # inner product sees the different *changes* and separates them.
+    xi = np.linspace(0.0, 1.0, 2001)
+    base = np.sin(np.pi * xi)
+    layer = base + 0.5 * np.exp(-((xi - 0.95) / 0.01) ** 2)
+    mid = int(np.argmin(np.abs(xi - 0.5)))
+    base /= base[mid]
+    layer /= layer[mid]
+    B = np.stack([base, layer])
+    c_l2 = bubble_cosine_similarity(B, xi, lambda_deriv=0.0)[0, 1]
+    c_h1 = bubble_cosine_similarity(B, xi, lambda_deriv=0.2)[0, 1]
+    assert c_l2 > 0.99                      # L2 calls them near-duplicates
+    assert c_h1 < c_l2 - 0.25               # H1 sees genuinely different shapes
+
+
+def test_h1_gram_reduces_to_l2_for_lambda_zero():
+    rng = np.random.default_rng(5)
+    xi = np.linspace(0.0, 1.0, 65)
+    b = rng.normal(size=(4, xi.size))
+    V0 = _bubble_h1_features(b, xi, 0.0)
+    G_l2 = V0 @ V0.T
+    w = np.empty(xi.size); w[0] = 0.5 * (xi[1] - xi[0])
+    w[-1] = 0.5 * (xi[-1] - xi[-2]); w[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+    assert np.allclose(G_l2, (b * w) @ b.T)
+    # The derivative term genuinely changes the similarities for arbitrary data.
+    C0 = bubble_cosine_similarity(b, xi, lambda_deriv=0.0)
+    C2 = bubble_cosine_similarity(b, xi, lambda_deriv=0.2)
+    assert np.ptp(C0 - C2) > 1e-3
 
 
 # --------------------------------------------------------------------------

@@ -475,12 +475,16 @@ from src.dataset_generation import (
 
 xi_sim = np.linspace(0, 1, 101)
 
-# --- 8.1 Gram matrix matches analytic L2 inner product ---
+# --- 8.1 Gram matrix matches analytic H1 inner product (lambda=0.2) ---
 b_parab = 4.0 * xi_sim * (1.0 - xi_sim)
-G_parab = bubble_gram_matrix(np.vstack([b_parab]), xi_sim)
-expected = 16.0 / 30.0  # \int_0^1 [4x(1-x)]^2 dx
-check("similarity: Gram diag for 4x(1-x)", abs(G_parab[0, 0] - expected) / expected < 1e-3,
+lam = 0.2
+G_parab = bubble_gram_matrix(np.vstack([b_parab]), xi_sim, lambda_deriv=lam)
+expected = 16.0 / 30.0 + lam**2 * (16.0 / 3.0)  # int b^2 + lam^2 * int (b')^2
+check("similarity: Gram diag (H1) for 4x(1-x)", abs(G_parab[0, 0] - expected) / expected < 1e-3,
       f"got {G_parab[0,0]:.6f}, expected {expected:.6f}")
+G_l2 = bubble_gram_matrix(np.vstack([b_parab]), xi_sim, lambda_deriv=0.0)
+check("similarity: Gram diag (L2) for 4x(1-x)", abs(G_l2[0, 0] - 16.0 / 30.0) / (16.0 / 30.0) < 1e-3,
+      f"got {G_l2[0,0]:.6f}, expected {16.0/30.0:.6f}")
 
 # --- 8.2 Cosine similarity: identical, scaled, orthogonal ---
 B_id = np.vstack([b_parab, b_parab])

@@ -1305,12 +1305,50 @@ def dataset_summary(dataset: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def bubble_gram_matrix(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
-    """L2 Gram matrix of bubbles: G[i, j] = ∫₀¹ b_i(ξ) b_j(ξ) dξ.
+_DEF_LAMBDA_DERIV = 0.2
 
-    The integral is approximated with the trapezoidal rule on the FD grid.
-    Since every bubble is normalized (b(0.5) = 1), G[i, i] is the squared
-    L2 norm of bubble i.
+
+def _quadrature_weights(xi: np.ndarray) -> np.ndarray:
+    """Trapezoidal rule weights on the FD grid (endpoints get half weight)."""
+    weights = np.empty(xi.size, dtype=float)
+    weights[0] = 0.5 * (xi[1] - xi[0])
+    weights[-1] = 0.5 * (xi[-1] - xi[-2])
+    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
+    return weights
+
+
+def _bubble_h1_features(
+    b_array: np.ndarray,
+    xi: np.ndarray,
+    lambda_deriv: float = _DEF_LAMBDA_DERIV,
+) -> np.ndarray:
+    """Augmented feature matrix whose Euclidean product is the H1 inner product.
+
+    F(b) = (√w · b, λ · √w · db/dξ), so that for two bubbles
+        F(b) · F(b') = ∫₀¹ b b' dξ + λ² ∫₀¹ (db/dξ)(db'/dξ) dξ
+    where ∫ is the trapezoidal quadrature.  With ``lambda_deriv = 0`` this
+    reduces exactly to the plain L2 feature matrix √w · b.
+    """
+    w = _quadrature_weights(xi)
+    sw = np.sqrt(w)
+    if lambda_deriv is None or lambda_deriv <= 0.0:
+        return b_array * sw
+    db = np.gradient(b_array, xi, axis=1)
+    return np.concatenate([b_array * sw, lambda_deriv * db * sw], axis=1)
+
+
+def bubble_gram_matrix(
+    b_array: np.ndarray,
+    xi: np.ndarray,
+    lambda_deriv: float = _DEF_LAMBDA_DERIV,
+) -> np.ndarray:
+    """H1 Gram matrix of bubbles: G[i, j] = ⟨b_i, b_j⟩_H1
+    = ∫₀¹ b_i b_j dξ + λ² ∫₀¹ b_i' b_j' dξ.
+
+    The integrals are approximated with the trapezoidal rule on the FD grid
+    and a centered-difference derivative.  Since every bubble is normalized
+    (b(0.5) = 1), G[i, i] is the squared H1 norm of bubble i.  With
+    ``lambda_deriv = 0`` this is the plain L2 Gram matrix.
 
     Parameters
     ----------
@@ -1318,6 +1356,11 @@ def bubble_gram_matrix(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
         Bubble values on the FD grid, one row per sample.
     xi : ndarray, shape (n_fd,)
         FD grid points in [0, 1].
+    lambda_deriv : float
+        Length-scale weight of the derivative term (default 0.2, the H1
+        inner product).  The derivative-aware version distinguishes shapes
+        that share mass but differ in their *changes* (boundary-layer
+        sharpness, ripples) which plain L2 would call near-identical.
 
     Returns
     -------
@@ -1332,19 +1375,23 @@ def bubble_gram_matrix(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
         raise ValueError("bubble data must be finite and contain at least two grid points")
     if np.any(np.diff(xi) <= 0):
         raise ValueError("xi must be strictly increasing")
-    weights = np.empty(xi.size, dtype=float)
-    weights[0] = 0.5 * (xi[1] - xi[0])
-    weights[-1] = 0.5 * (xi[-1] - xi[-2])
-    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
-    return (b * weights) @ b.T
+    V = _bubble_h1_features(b, xi, lambda_deriv)
+    return V @ V.T
 
 
-def bubble_cosine_similarity(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
+def bubble_cosine_similarity(
+    b_array: np.ndarray,
+    xi: np.ndarray,
+    lambda_deriv: float = _DEF_LAMBDA_DERIV,
+) -> np.ndarray:
     """Normalized (cosine) similarity matrix C[i, j] ∈ [-1, 1].
 
-    C[i, j] = ⟨b_i, b_j⟩ / (‖b_i‖ ‖b_j‖) with the L2 inner product.
-    C[i, j] ≈ 1 means the two bubbles are nearly identical in *shape*
-    (equal up to a positive scalar multiple), regardless of their norms.
+    C[i, j] = ⟨b_i, b_j⟩ / (‖b_i‖ ‖b_j‖) with the H1 inner product
+    (derivative-aware; ``lambda_deriv=0`` recovers the L2 version).
+    C[i, j] ≈ 1 means the two bubbles are nearly identical in *shape and
+    change* (equal up to a positive scalar multiple), regardless of their
+    norms.  Unlike the plain L2 cosine, this metric flags shapes that differ
+    in their derivatives (boundary-layer sharpness, oscillation) as distinct.
 
     Parameters
     ----------
@@ -1352,13 +1399,15 @@ def bubble_cosine_similarity(b_array: np.ndarray, xi: np.ndarray) -> np.ndarray:
         Bubble values on the FD grid, one row per sample.
     xi : ndarray, shape (n_fd,)
         FD grid points in [0, 1].
+    lambda_deriv : float
+        Derivative-term weight (default 0.2).
 
     Returns
     -------
     ndarray, shape (N, N)
         Symmetric cosine similarity matrix.
     """
-    G = bubble_gram_matrix(b_array, xi)
+    G = bubble_gram_matrix(b_array, xi, lambda_deriv)
     d = np.sqrt(np.clip(np.diag(G), 1e-30, None))
     C = G / np.outer(d, d)
     return np.clip(C, -1.0, 1.0)
@@ -1368,11 +1417,14 @@ def max_cross_similarity(
     other: np.ndarray,
     reference: np.ndarray,
     xi: np.ndarray,
+    lambda_deriv: float = _DEF_LAMBDA_DERIV,
     block_size: int = 1024,
 ) -> np.ndarray:
     """Return each ``other`` row's maximum cosine similarity to ``reference``.
 
-    The calculation is blockwise and therefore avoids materializing an
+    Both arrays are compared with the derivative-aware H1 inner product
+    (``lambda_deriv=0`` recovers the L2 version).  The calculation is
+    blockwise and therefore avoids materializing an
     ``len(other) x len(reference)`` matrix.  This is the production primitive
     for leakage audits and large no-twin splits.
     """
@@ -1383,21 +1435,19 @@ def max_cross_similarity(
     xi = np.asarray(xi, dtype=float)
     if xi.ndim != 1 or xi.size < 2 or np.any(np.diff(xi) <= 0):
         raise ValueError("xi must be a strictly increasing one-dimensional grid")
-    weights = np.empty(xi.size, dtype=float)
-    weights[0] = 0.5 * (xi[1] - xi[0])
-    weights[-1] = 0.5 * (xi[-1] - xi[-2])
-    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
     if other.ndim != 2 or reference.ndim != 2 or other.shape[1] != reference.shape[1]:
         raise ValueError("bubble arrays must be two-dimensional with matching grids")
     if other.shape[1] != xi.size or not np.all(np.isfinite(other)) or not np.all(np.isfinite(reference)):
         raise ValueError("bubble arrays must be finite and match xi")
-    other_n = np.sqrt(np.maximum(np.sum(other * other * weights, axis=1), 1e-30))
-    ref_n = np.sqrt(np.maximum(np.sum(reference * reference * weights, axis=1), 1e-30))
+    V_other = _bubble_h1_features(other, xi, lambda_deriv)
+    V_ref = _bubble_h1_features(reference, xi, lambda_deriv)
+    other_n = np.sqrt(np.maximum(np.sum(V_other * V_other, axis=1), 1e-30))
+    ref_n = np.sqrt(np.maximum(np.sum(V_ref * V_ref, axis=1), 1e-30))
     out = np.empty(other.shape[0], dtype=float)
-    reference_weighted = reference * weights
+    V_refT = V_ref.T
     for start in range(0, other.shape[0], block_size):
         stop = min(start + block_size, other.shape[0])
-        sims = (other[start:stop] @ reference_weighted.T)
+        sims = (V_other[start:stop] @ V_refT)
         sims /= other_n[start:stop, None] * ref_n[None, :]
         out[start:stop] = np.clip(sims, -1.0, 1.0).max(axis=1)
     return out
@@ -1428,7 +1478,8 @@ def _off_diagonal_stats(C: np.ndarray) -> dict[str, float]:
 
 
 def _off_diagonal_stats_blockwise(
-    b: np.ndarray, xi: np.ndarray, block_size: int = 1024
+    b: np.ndarray, xi: np.ndarray, lambda_deriv: float = _DEF_LAMBDA_DERIV,
+    block_size: int = 1024,
 ) -> dict[str, float]:
     """Compute off-diagonal cosine statistics without an NxN matrix."""
     if block_size < 1:
@@ -1440,16 +1491,13 @@ def _off_diagonal_stats_blockwise(
     n = b.shape[0]
     if n < 2:
         return _off_diagonal_stats(np.empty((1, 1)))
-    weights = np.empty(len(xi), dtype=float)
-    weights[0] = 0.5 * (xi[1] - xi[0])
-    weights[-1] = 0.5 * (xi[-1] - xi[-2])
-    weights[1:-1] = 0.5 * (xi[2:] - xi[:-2])
-    norms = np.sqrt(np.maximum(np.sum(b * b * weights, axis=1), 1e-30))
+    V = _bubble_h1_features(b, xi, lambda_deriv)
+    norms = np.sqrt(np.maximum(np.sum(V * V, axis=1), 1e-30))
     values = []
-    weighted = b * weights
+    weighted = V
     for start in range(0, n, block_size):
         stop = min(start + block_size, n)
-        block = (b[start:stop] @ weighted.T) / norms[start:stop, None] / norms[None, :]
+        block = (V[start:stop] @ weighted.T) / norms[start:stop, None] / norms[None, :]
         rows = np.arange(start, stop)
         block[rows - start, rows] = np.nan
         values.append(block[~np.isnan(block)])
@@ -1497,13 +1545,14 @@ def bubble_similarity_analysis(
     dataset: dict[str, Any],
     mode: str = "constant",
     splits: tuple[str, ...] = ("train", "val", "test"),
+    lambda_deriv: float = _DEF_LAMBDA_DERIV,
     n_eig_samples: int = 500,
     seed: int = 0,
     return_matrices: bool = False,
     block_size: int = 1024,
     verbose: bool = True,
 ) -> dict[str, Any]:
-    """Analyze bubble redundancy and train/test leakage via L2 similarities.
+    """Analyze bubble redundancy and train/test leakage via similarities.
 
     Motivation (professor's concern): if all bubbles in the dataset are
     nearly identical in shape, the KAN can memorize a single function and
@@ -1512,8 +1561,16 @@ def bubble_similarity_analysis(
     functions may be much smaller than the number of samples, inflating
     generalization numbers.
 
+    Similarity is measured with the *derivative-aware H1 cosine*: two
+    bubbles are ``twin``-like only when they agree in value *and* in
+    derivative (boundary-layer sharpness, oscillation).  The plain L2
+    cosine reports any two bubbles with overlapping mass as near-identical
+    even when their shapes differ measurably; with ``lambda_deriv=0`` the
+    analysis reverts to that L2 metric.
+
     For each requested split the function computes:
-      * the L2 cosine-similarity matrix C[i, j] = ⟨b_i, b_j⟩ / (‖b_i‖‖b_j‖),
+      * the H1 cosine-similarity matrix
+        C[i, j] = ⟨b_i, b_j⟩_H1 / (‖b_i‖_H1‖b_j‖_H1),
       * off-diagonal statistics (how often distinct bubbles are near-duplicates),
       * the eigenvalue decay / effective rank on a random subsample
         (how many genuinely distinct bubble shapes the split spans).
@@ -1533,6 +1590,8 @@ def bubble_similarity_analysis(
     splits : tuple[str, ...]
         Splits to analyze. The first one is treated as the reference
         (training) split for cross-split leakage.
+    lambda_deriv : float
+        Derivative term weight of the H1 inner product (default 0.2).
     n_eig_samples : int
         Number of (subsampled) bubbles used for the eigenvalue analysis.
     seed : int
@@ -1566,16 +1625,17 @@ def bubble_similarity_analysis(
         split_arrays[sname] = (b, xi)
 
         within = {"n_samples": b.shape[0]}
-        within["off_diagonal"] = _off_diagonal_stats_blockwise(b, xi, block_size)
+        within["off_diagonal"] = _off_diagonal_stats_blockwise(
+            b, xi, lambda_deriv, block_size)
 
         n = b.shape[0]
         n_sub = min(n, n_eig_samples)
         idx = rng.choice(n, size=n_sub, replace=False)
-        C_sub = bubble_cosine_similarity(b[idx], xi)
+        C_sub = bubble_cosine_similarity(b[idx], xi, lambda_deriv)
         within["effective_rank"] = _effective_rank(C_sub)
 
         if return_matrices:
-            within["C"] = bubble_cosine_similarity(b, xi)
+            within["C"] = bubble_cosine_similarity(b, xi, lambda_deriv)
         result["within"][sname] = within
 
     if ref_split in split_arrays:
@@ -1586,7 +1646,7 @@ def bubble_similarity_analysis(
             # Cross Gram: rows = non-train samples, cols = reference samples.
             # The normal production path computes only nearest similarities.
             # Full cross matrices remain available explicitly for diagnostics.
-            max_sim = max_cross_similarity(b, B_ref, xi_ref, block_size=block_size)
+            max_sim = max_cross_similarity(b, B_ref, xi_ref, lambda_deriv, block_size)
             stats = {
                 "n_other": b.shape[0],
                 "max_sim_mean": float(max_sim.mean()),
@@ -1599,13 +1659,11 @@ def bubble_similarity_analysis(
             }
             entry: dict[str, Any] = {"max_similarity": max_sim, "stats": stats}
             if return_matrices:
-                weights = np.empty(xi_ref.size, dtype=float)
-                weights[0] = 0.5 * (xi_ref[1] - xi_ref[0])
-                weights[-1] = 0.5 * (xi_ref[-1] - xi_ref[-2])
-                weights[1:-1] = 0.5 * (xi_ref[2:] - xi_ref[:-2])
-                d_ref = np.sqrt(np.maximum(np.sum(B_ref * B_ref * weights, axis=1), 1e-30))
-                d_oth = np.sqrt(np.maximum(np.sum(b * b * weights, axis=1), 1e-30))
-                C_cross = (b @ (B_ref * weights).T) / np.outer(d_oth, d_ref)
+                V_ref = _bubble_h1_features(B_ref, xi_ref, lambda_deriv)
+                V_oth = _bubble_h1_features(b, xi, lambda_deriv)
+                d_ref = np.sqrt(np.maximum(np.sum(V_ref * V_ref, axis=1), 1e-30))
+                d_oth = np.sqrt(np.maximum(np.sum(V_oth * V_oth, axis=1), 1e-30))
+                C_cross = (V_oth @ V_ref.T) / np.outer(d_oth, d_ref)
                 entry["C"] = np.clip(C_cross, -1.0, 1.0)
             result["cross"][f"{ref_split}_vs_{sname}"] = entry
 
@@ -1620,8 +1678,8 @@ def _print_similarity_summary(result: dict[str, Any]) -> None:
     print("\n" + "=" * 72)
     print(f"  BUBBLE SIMILARITY ANALYSIS  (mode: {mode})")
     print("=" * 72)
-    print("  Cosine similarity C[i,j] = <b_i,b_j> / (||b_i|| ||b_j||) in L2.")
-    print("  C near 1 => two bubbles are near-duplicates in shape.")
+    print("  Cosine similarity C[i,j] = <b_i,b_j> / (||b_i|| ||b_j||) in H1 (derivative-aware).")
+    print("  C near 1 => two bubbles are near-duplicates in shape AND change.")
     print()
 
     for sname, within in result["within"].items():

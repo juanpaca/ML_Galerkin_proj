@@ -100,11 +100,15 @@ print(f"n_fd_points = {ds['metadata']['n_fd_points']}, "
 # duplicate shapes), the KAN can memorize a single function and still report
 # low test error — the *effective* number of distinct shapes in the dataset
 # may be far smaller than the number of samples, inflating generalization
-# numbers. We quantify this with L2 cosine similarities:
+# numbers. We quantify this with derivative-aware H1 cosine similarities:
 #
-#   C[i,j] = <b_i, b_j> / (||b_i|| ||b_j||)   in L2,   C=1 => identical shape
+#   C[i,j] = <b_i, b_j>_H1 / (||b_i||_H1 ||b_j||_H1),   C=1 => identical shape
+#   <b_i,b_j>_H1 = int b_i b_j + lambda^2 * int b_i' b_j'   (default lambda=0.2)
 #
-# and, for each test bubble, its *best* similarity to any training bubble
+# The H1 inner product includes the *changes* of the functions: two bubbles
+# that differ in boundary-layer sharpness or oscillation are NOT considered
+# near-duplicates even when their L2 mass overlaps. Then, for each test
+# bubble, its *best* similarity to any training bubble is computed
 # (function-space leakage: a test bubble with a train twin C>0.99 is not a
 # genuine OOD benchmark). We run the analysis on BOTH the old frame-split
 # dataset (which leaks) and the new no-leak dataset (which should not).

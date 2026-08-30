@@ -143,6 +143,7 @@ external KAN training recipe but does not train locally.
 | `--n-fd-points` | 400 | FD grid for the reference bubbles. **Use 3200**: 400 under-resolves the Pe>50 boundary layer |
 | `--pe-range` / `--rho-range` | (0.3,100) / (0.2,100) | Parameter ranges (log-uniform) |
 | `--theta` | 0.99 | Twin-similarity threshold for the no-twin split |
+| `--lambda-deriv` | 0.2 | Derivative-term weight of the H¹ similarity metric (0 = plain L² cosine) |
 | `--train-frac` / `--val-frac` / `--test-frac` | 0.60 / 0.15 / 0.25 | Target split sizes |
 | `--seed` | 42 | RNG seed |
 | `--name` | `rfb_5k_noleak` | Dataset name (`datasets/<name>_*`) |
@@ -216,11 +217,15 @@ dataset_summary(ds)     # prints ranges and split counts
 ### 2c. Leakage / redundancy analysis
 
 Bubbles are normalized so b(0.5) = 1. `bubble_similarity_analysis` computes the
-L2 cosine similarity `C[i,j] = ⟨b_i,b_j⟩/(‖b_i‖‖b_j‖)` within each split, the
-spectral **effective rank** (how many genuinely distinct shapes a split spans),
-and — for every val/test bubble — its **maximum similarity to any train
-bubble**. A test bubble with a train twin (C > 0.99) is not a genuine OOD
-benchmark.
+**derivative-aware H¹ cosine similarity**
+`C[i,j] = ⟨b_i,b_j⟩_H1/(‖b_i‖_H1‖b_j‖_H1)` with
+`⟨b_i,b_j⟩_H1 = ∫b_i b_j + λ²∫b_i' b_j'` (default `λ = 0.2`) within each split,
+the spectral **effective rank** (how many genuinely distinct shapes a split
+spans), and — for every val/test bubble — its **maximum similarity to any
+train bubble**. A test bubble with a train twin (C > 0.99) is not a genuine
+OOD benchmark. The H¹ inner product includes the *changes* of the functions,
+so different boundary-layer sharpness / oscillation is not confused with
+near-duplication the way plain L² cosine would.
 
 ```python
 from src.dataset_generation import bubble_similarity_analysis
@@ -236,10 +241,11 @@ train–test similarity ≈ 0.98) even though the train set itself is redundant
 `rfb_5k_frame` dataset, by contrast, shows **100%** of test bubbles with a
 train twin and is kept only for comparison.
 
-Similarity uses trapezoidal quadrature. Cross-split maximum similarities and
-the production no-twin split are computed blockwise, so they do not require a
-full `N × N` matrix. Request `return_matrices=True` only for small diagnostic
-datasets.
+Similarity uses trapezoidal quadrature plus a λ/derivative term (H¹, default
+λ = 0.2; pass `lambda_deriv=0` for the plain L² version). Cross-split maximum
+similarities and the production no-twin split are computed blockwise, so they
+do not require a full `N × N` matrix. Request `return_matrices=True` only for
+small diagnostic datasets.
 
 ---
 

@@ -35,11 +35,16 @@ from src.training import train_multi_bubble_on_dataset
 from src.dataset_generation import train_multi_bubble_on_dataset as implementation_trainer
 
 
-def test_similarity_uses_trapezoidal_weights():
+def test_similarity_uses_h1_inner_product():
     xi = np.array([0.0, 0.25, 1.0])
     b = np.array([[1.0, 1.0, 1.0]])
-    # Integral of the constant function on [0, 1] is exactly one.
-    assert np.isclose(bubble_gram_matrix(b, xi)[0, 0], 1.0)
+    # A constant bubble has zero derivative: H1 gram == L2 gram == 1.
+    assert np.isclose(bubble_gram_matrix(b, xi, lambda_deriv=0.2)[0, 0], 1.0)
+    # A non-constant bubble gains derivative content: H1 gram > L2 gram.
+    b_lin = np.array([[0.0, 1.0, 2.0]])
+    G_l2 = bubble_gram_matrix(b_lin, xi, lambda_deriv=0.0)[0, 0]
+    G_h1 = bubble_gram_matrix(b_lin, xi, lambda_deriv=0.2)[0, 0]
+    assert G_h1 > G_l2
 
 
 def test_blockwise_cross_similarity_matches_dense():
