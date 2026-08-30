@@ -33,6 +33,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from src.darcy_assembly import (
+    assemble_enriched,
+    assemble_p1,
+    element_load,
+    element_stiffness,
+    eval_enriched,
+    rel_l2,
+)
 from src.dataset_generation import load_dataset
 from src.darcy_variable import PiecewiseDiffusion, make_profile_features, solve_darcy_1d
 from src.rfb_bubble import MultiKANBubble1D
@@ -41,47 +49,6 @@ DATASET_NAME = "darcy_piecewise_combo20k"
 SUBDIR = "data_darcy_variable"
 MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
 N_FEATURES = 24
-
-
-def element_stiffness(xa: float, xb: float, profile: PiecewiseDiffusion) -> np.ndarray:
-    """Exact local stiffness for piecewise-constant epsilon on [xa, xb]."""
-    h = xb - xa
-    # int_a^b epsilon dx by intersection with the piece intervals.
-    total = 0.0
-    for e0, e1, v in zip(profile.edges[:-1], profile.edges[1:], profile.values):
-        lo, hi = max(xa, e0), min(xb, e1)
-        if hi > lo:
-            total += v * (hi - lo)
-    return total / h**2 * np.array([[1.0, -1.0], [-1.0, 1.0]])
-
-
-def element_load(xa: float, xb: float, source) -> np.ndarray:
-    """Local load vector via 3-point Gauss (exact for linear f times P1)."""
-    nodes, weights = np.polynomial.legendre.leggauss(3)
-    xm, hr = 0.5 * (xa + xb), 0.5 * (xb - xa)
-    xg = xm + hr * nodes
-    h = xb - xa
-    phi1 = (xb - xg) / h
-    phi2 = (xg - xa) / h
-    fg = np.asarray(source(xg), dtype=float)
-    return np.array([
-        np.sum(weights * phi1 * fg),
-        np.sum(weights * phi2 * fg),
-    ]) * hr
-
-
-def assemble_p1(mesh: np.ndarray, profile: PiecewiseDiffusion, source):
-    """Classical P1 Galerkin system with Dirichlet rows/cols removed."""
-    n = mesh.size
-    A = np.zeros((n, n))
-    F = np.zeros(n)
-    for e in range(n - 1):
-        ke = element_stiffness(mesh[e], mesh[e + 1], profile)
-        fe = element_load(mesh[e], mesh[e + 1], source)
-        A[e:e + 2, e:e + 2] += ke
-        F[e:e + 2] += fe
-    free = np.arange(1, n - 1)  # u(0) = u(1) = 0
-    return A[np.ix_(free, free)], F[free], free
 
 
 def eval_bubbles(model: MultiKANBubble1D, profile: PiecewiseDiffusion,
@@ -99,81 +66,6 @@ def eval_bubbles(model: MultiKANBubble1D, profile: PiecewiseDiffusion,
     for b in shapes:  # remove tiny endpoint leakage -> homogeneous BCs
         b -= b[0] * (1.0 - xi) + b[-1] * xi
     return shapes
-
-
-def assemble_enriched(mesh, profile, source, bubbles, xi_ref, dx):
-    """Enriched Galerkin system condensed onto the bubble DOFs.
-
-    Returns the full solution on ``mesh`` plus the bubble coefficients.
-    Bubble couplings use composite trapezoid on the fine reference grid;
-    P1 blocks stay analytic.
-    """
-    n = mesh.size
-    nb = bubbles.shape[0]
-    A_LL, F_L, free = assemble_p1(mesh, profile, source)
-
-    eps_ref = profile.evaluate(xi_ref)
-    w = np.full_like(xi_ref, dx)
-    w[0] = w[-1] = 0.5 * dx
-
-    def deriv(b):
-        return np.gradient(b, xi_ref)
-
-    dbs = [deriv(b) for b in bubbles]
-
-    # Coupling <phi'_m, eps b'_j>: assemble element-wise with proper local
-    # trapezoid weights (shared endpoints halved per element). On element e,
-    # phi'_{e+1} = +1/h_e and phi'_e = -1/h_e.
-    n_grid = xi_ref.size
-    step = (n_grid - 1) // (n - 1)
-    if step * (n - 1) != n_grid - 1:
-        raise ValueError("reference grid must align with the mesh")
-    A_Lb_full = np.zeros((n, nb))
-    for e in range(n - 1):
-        i0, i1 = e * step, (e + 1) * step
-        w_loc = np.full(i1 - i0 + 1, dx)
-        w_loc[0] *= 0.5
-        w_loc[-1] *= 0.5
-        h_e = mesh[e + 1] - mesh[e]
-        for j, db in enumerate(dbs):
-            g_e = np.sum(w_loc * eps_ref[i0:i1 + 1] * db[i0:i1 + 1]) / h_e
-            A_Lb_full[e, j] -= g_e
-            A_Lb_full[e + 1, j] += g_e
-    A_Lb = A_Lb_full[free]
-
-    A_bb = np.empty((nb, nb))
-    dbs = [deriv(b) for b in bubbles]
-    for i in range(nb):
-        for j in range(nb):
-            A_bb[i, j] = np.sum(w * eps_ref * dbs[i] * dbs[j])
-    F_b = np.array([np.sum(w * np.asarray(source(xi_ref)) * b) for b in bubbles])
-
-    # Static condensation: eliminate nodal DOFs, solve 2x2 bubble system.
-    A_LL_inv_F = np.linalg.solve(A_LL, F_L)
-    A_LL_inv_ALb = np.linalg.solve(A_LL, A_Lb)
-    S = A_bb - A_Lb.T @ A_LL_inv_ALb
-    g = F_b - A_Lb.T @ A_LL_inv_F
-    coeffs = np.linalg.solve(S, g)
-    U_free = A_LL_inv_F - A_LL_inv_ALb @ coeffs
-
-    U = np.zeros(n)
-    U[free] = U_free
-    return U, coeffs
-
-
-def eval_enriched(u_nodes: np.ndarray, coeffs: np.ndarray | None,
-                  bubbles: np.ndarray | None, mesh: np.ndarray,
-                  x_query: np.ndarray) -> np.ndarray:
-    """Full enriched field: P1 interpolant plus the bubble correction."""
-    u = np.interp(x_query, mesh, u_nodes)
-    if coeffs is not None:
-        for c, b in zip(coeffs, bubbles):
-            u += c * b
-    return u
-
-
-def rel_l2(u_h, u_ref, x):
-    return np.linalg.norm(u_h - u_ref) / np.maximum(np.linalg.norm(u_ref), 1e-14)
 
 
 def main():

@@ -16,11 +16,100 @@ from pathlib import Path
 import numpy as np
 
 from data_generation import shape_no_leak_split_from_pool
-from src.darcy_variable import generate_darcy_pool
+from src.darcy_assembly import enrichment_l2_gate
+from src.darcy_variable import PiecewiseDiffusion, generate_darcy_pool
 from src.dataset_generation import bubble_similarity_analysis, load_dataset, save_dataset
 
 
 DATA_SUBDIR = "data_darcy_variable"
+
+_GATE_SOURCES = {
+    "constant": lambda x: np.ones_like(np.asarray(x, dtype=float)),
+    "xi": lambda x: np.asarray(x, dtype=float),
+}
+
+
+def _profile_from_pool(pool: dict, i: int) -> PiecewiseDiffusion:
+    return PiecewiseDiffusion(np.asarray(pool["piece_edges"][i], dtype=float),
+                              np.asarray(pool["piece_values"][i], dtype=float))
+
+
+def _filter_pool(pool: dict, keep: np.ndarray) -> dict:
+    """Keep the pool samples with ``keep[i]`` True (all arrays stay in sync)."""
+    keep = np.asarray(keep, dtype=bool)
+    modes = {}
+    for mode in pool["mode_names"]:
+        d = pool[mode]
+        modes[mode] = {
+            k: (v if k == "xi" else v[keep]) for k, v in d.items()
+        }
+    out = {
+        **modes,
+        "mode_names": pool["mode_names"],
+        "piece_edges": [e for e, k in zip(pool["piece_edges"], keep) if k],
+        "piece_values": [v for v, k in zip(pool["piece_values"], keep) if k],
+        "metadata": dict(pool["metadata"]),
+    }
+    out["metadata"]["n_samples"] = int(keep.sum())
+    return out
+
+
+def audit_enrichment_gate(
+    pool: dict,
+    threshold: float = 1e-2,
+    n_ref: int = 32001,
+    n_el: int = 8,
+    drop: bool = False,
+) -> tuple[dict, dict]:
+    """Pre-training quality gate: every bubble must enrich P1 to rel-L2<thr.
+
+    Runs the static-condensation enrichment with the pool's exact FD bubbles
+    (full-domain b_hat, b_tilde), on a uniform ``n_el``+1-node P1 mesh (the
+    deployment assembly in the demo), against an independent ``n_ref``
+    reference, per source mode.  Returns ``(pool' , report)`` where
+    badly-behaved samples are dropped when ``drop=True``, otherwise a hard
+    failure is raised listing the worst offender.
+    """
+    n = len(pool["constant"]["pe"])
+    per_mode = {mode: np.zeros(n) for mode in pool["mode_names"]}
+    worst = {"mode": None, "idx": -1, "rel_l2": 0.0}
+    for i in range(n):
+        profile = _profile_from_pool(pool, i)
+        bubbles = np.stack([
+            pool[mode]["b"][i] for mode in pool["mode_names"]
+        ])
+        result = enrichment_l2_gate(
+            profile, bubbles, _GATE_SOURCES, n_ref=n_ref, n_el=n_el,
+        )
+        for mode, err in result.items():
+            per_mode[mode][i] = err
+            if err > worst["rel_l2"]:
+                worst = {"mode": mode, "idx": i, "rel_l2": err}
+
+    mx = {mode: float(np.max(per_mode[mode])) for mode in per_mode}
+    report = {
+        "threshold": threshold,
+        "n_ref": n_ref,
+        "mesh": f"uniform_n_el={n_el}",
+        "per_mode_max": mx,
+        "per_mode_mean": {m: float(np.mean(v)) for m, v in per_mode.items()},
+        "per_mode_p95": {m: float(np.quantile(v, 0.95)) for m, v in per_mode.items()},
+        "worst": worst,
+        "n_checked": n,
+    }
+    failed = np.any(np.stack([per_mode[m] for m in per_mode]) > threshold, axis=0)
+    report["n_failed"] = int(failed.sum())
+    if report["n_failed"]:
+        if not drop:
+            raise RuntimeError(
+                f"enrichment gate failed for {failed.sum()} samples "
+                f"(worst {worst['mode']} #{worst['idx']}: "
+                f"rel-L2={worst['rel_l2']:.3e} > {threshold:g})")
+        print(f"[gate] dropping {failed.sum()}/{n} samples above "
+              f"threshold {threshold:g}")
+        pool = _filter_pool(pool, ~failed)
+        report["n_dropped"] = int(failed.sum())
+    return pool, report
 
 
 def build_split_dataset(
@@ -137,6 +226,11 @@ def generate_and_save_dataset(
     min_width: float = 0.0,
     split_strategy: str = "no_twin_shape",
     eps_range: tuple[float, float] = (0.1, 100.0),
+    verify_enrichment: bool = True,
+    gate_threshold: float = 1e-2,
+    gate_n_ref: int = 32001,
+    gate_n_el: int = 8,
+    gate_drop: bool = False,
 ) -> dict:
     """Generate, split, save, reload, and audit a Darcy dataset."""
     pool = generate_darcy_pool(
@@ -150,9 +244,28 @@ def generate_and_save_dataset(
         feature_kind=feature_kind,
         min_width=min_width,
     )
+    gate_report = None
+    if verify_enrichment:
+        pool, gate_report = audit_enrichment_gate(
+            pool, threshold=gate_threshold, n_ref=gate_n_ref,
+            n_el=gate_n_el, drop=gate_drop,
+        )
+        print("[gate] enrichment rel-L2  "
+              + "  ".join(
+                  f"{m}: mean={gate_report['per_mode_mean'][m]:.2e} "
+                  f"p95={gate_report['per_mode_p95'][m]:.2e} "
+                  f"max={gate_report['per_mode_max'][m]:.2e}"
+                  for m in pool["mode_names"]))
+        print(f"[gate] worst #{gate_report['worst']['idx']} "
+              f"({gate_report['worst']['mode']}): "
+              f"rel-L2={gate_report['worst']['rel_l2']:.3e}  "
+              f"threshold={gate_threshold:g}  "
+              f"checked={gate_report['n_checked']}")
     dataset = build_split_dataset(pool, theta, val_frac, test_frac, train_frac,
                                   strategy=split_strategy)
     dataset["metadata"]["name"] = name
+    if gate_report is not None:
+        dataset["metadata"]["enrichment_gate"] = gate_report
     save_dataset(dataset, name=name, subdir=subdir)
     loaded = load_dataset(name, subdir=subdir)
     if split_strategy == "no_twin_shape":
@@ -198,6 +311,18 @@ def main():
                         help="lower bound of piecewise-constant eps values")
     parser.add_argument("--eps-max", type=float, default=100.0,
                         help="upper bound of piecewise-constant eps values")
+    parser.add_argument("--verify-enrichment", dest="verify_enrichment",
+                        action=argparse.BooleanOptionalAction, default=True,
+                        help="audit every bubble via P1+condensation enrichment "
+                             "against an independent fine reference")
+    parser.add_argument("--gate-threshold", type=float, default=1e-2,
+                        help="max allowed enriched rel-L2 per sample")
+    parser.add_argument("--gate-n-ref", type=int, default=32001,
+                        help="independent reference resolution for the gate")
+    parser.add_argument("--gate-n-elements", type=int, default=8,
+                        help="P1 elements in the gate's condensation mesh")
+    parser.add_argument("--gate-drop", action="store_true",
+                        help="drop failing samples instead of aborting")
     args = parser.parse_args()
 
     ds = generate_and_save_dataset(
@@ -217,6 +342,11 @@ def main():
         min_width=args.min_width,
         split_strategy=args.split_strategy,
         eps_range=(args.eps_min, args.eps_max),
+        verify_enrichment=args.verify_enrichment,
+        gate_threshold=args.gate_threshold,
+        gate_n_ref=args.gate_n_ref,
+        gate_n_el=args.gate_n_elements,
+        gate_drop=args.gate_drop,
     )
     print(f"Saved datasets/{DATA_SUBDIR}/{args.name}_*.npz")
     if args.split_strategy == "contrast_band":
@@ -225,12 +355,15 @@ def main():
             lo, hi = edges[band]
             print(f"{band:5s}: contrast in [{lo:.3f}, {hi:.2f}] "
                   f"({ds['metadata']['n_' + band]} samples)")
-    else:
+    elif "leakage_report" in ds and "train_vs_test" in ds["leakage_report"]["constant"]["cross"]:
         stats = ds["leakage_report"]["constant"]["cross"]["train_vs_test"]["stats"]
         print(f"Splits: {stats['n_other']} test samples; "
               f"max train-test similarity={stats['max_sim_max']:.6f}")
         print(f"Test twins above theta={args.theta}: "
               f"{100 * stats['frac_gt_0.99']:.2f}% when theta=0.99")
+    else:
+        print(f"Splits: {[k for k in ('train','val','test')]} "
+              f"{[ds['metadata']['n_' + k] for k in ('train','val','test')]} samples")
 
 
 if __name__ == "__main__":
