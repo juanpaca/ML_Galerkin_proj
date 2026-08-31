@@ -86,14 +86,14 @@ constant profile:
 | pieces | exactly 5 |
 | min piece width | 0.1 (= ℓ/10) |
 | ε values | log-uniform in [0.1, 10] (contrast c = ε_max/ε_min ∈ [1, 100]) |
-| FD grid | `n_fd_points = 3201` |
+| FD grid | `n_fd_points = 6401` |
 | profile features | `scaled_combo_v2` (8 dims) |
 | split | `contrast_band` 70/15/15 |
 
-`n_fd_points = 3201` is the resolution convention: the conservative FD solver
-under-resolves thin high-contrast boundary layers at lower grids (e.g. 801 pts
-→ ~6e-3 rel-L2, 3201 pts → ~1.7e-3), and the enrichment gate drops the last
-~0.5–1% of FD-under-resolved samples.
+`n_fd_points = 6401` is the resolution convention: the conservative FD solver
+under-resolves thin high-contrast boundary layers at coarser grids (e.g. 801
+pts → ~6e-3 rel-L2, 3201 → ~1.7e-3), so the reference bubbles are generated
+at 6401 for extra headroom with the enrichment gate disabled.
 
 ### Data-generation script
 
@@ -101,7 +101,7 @@ under-resolves thin high-contrast boundary layers at lower grids (e.g. 801 pts
 venv/bin/python data_generation_darcy_variable.py \
     --name darcy_piecewise_5pc \
     --n-samples 5000 \
-    --n-fd-points 3201 \
+    --n-fd-points 6401 \
     --min-pieces 5 --max-pieces 5 \
     --min-width 0.1 \
     --eps-min 0.1 --eps-max 10.0 \
@@ -114,7 +114,7 @@ It writes `datasets/data_darcy_variable/<name>_*.npz` + `_metadata.json`.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--n-samples` | 5000 | Pool size |
-| `--n-fd-points` | 801 | FD grid for reference bubbles (**use 3201**) |
+| `--n-fd-points` | 801 | FD grid for reference bubbles (tutorial uses 6401) |
 | `--min-pieces` / `--max-pieces` | 2 / 8 | Range of piece counts |
 | `--min-width` | 0.0 | Minimum piece measure on the normalized interval |
 | `--eps-min` / `--eps-max` | 0.1 / 100.0 | ε value range (log-uniform) |
@@ -127,12 +127,20 @@ It writes `datasets/data_darcy_variable/<name>_*.npz` + `_metadata.json`.
 
 ### Enrichment gate (pre-training data-quality bar)
 
-Before training, every bubble must demonstrably *enrich* the P1 Galerkin
+Before training, every bubble can be audited to *enrich* the P1 Galerkin
 solution. `audit_enrichment_gate` runs the **deployed assembly** — a uniform
 `n_el = 8`-node P1 mesh with ONE global coefficient pair per mode, statically
 condensed — against an independent fine reference (`n_gate_ref`), per source
-mode. This is the same code path used in the demo/application, so the gate
-measures bubble quality in the real consumption path.
+mode. This is the same code path used in the demo/application, so it measures
+bubble quality in the real consumption path.
+
+**The reference recomputation is optional.** The default tutorial run disables
+it (`verify_enrichment=False`) and instead redirects that compute budget into
+generating finer reference bubbles (`n_fd_points = 6401`). To re-enable the
+gate for an experiment, keep it on via the generation **CLI**
+(`--verify-enrichment`, `--gate-threshold`, `--gate-n-ref`, `--gate-drop`) or
+the **API** (`generate_and_save_dataset(..., verify_enrichment=True, ...)`);
+it is fully tested and remains available.
 
 Key facts:
 
@@ -141,10 +149,9 @@ Key facts:
 - For pure diffusion with a mesh aligned to the ε-pieces, `A_Lb ≡ 0`, so
   recovery is span-only `c_e = A_bb⁻¹F_b`; the generic
   `A_bb⁻¹(F_b − A_LbᵀU)` recovery amplifies FD-gradient noise at coarse grids.
-- Empirical distribution (5-piece spec): enriched rel-L2 mean ≈ 1.5e-3,
-  p95 ≈ 5e-3, worst ≈ 2.2e-2; the worst ~0.5–1% are dropped by `--gate-drop`
-  at the default threshold.
-- Resolution: enriched rel-L2 ~ 2.3e-2 (201 pts) → 6.5e-3 (801) → 1.7e-3 (3201).
+- If enabled at `n_fd=3201`/`n_gate_ref=32001`: mean ≈ 1.5e-3, p95 ≈ 5e-3,
+  worst ≈ 2.2e-2; the worst ~0.5–1% are dropped by `--gate-drop` at the
+  default threshold.
 
 ### Data-generation API
 
@@ -153,7 +160,7 @@ from data_generation_darcy_variable import generate_and_save_dataset
 from src.dataset_generation import load_dataset
 
 ds = generate_and_save_dataset(
-    name="darcy_piecewise_5pc", n_samples=5000, n_fd_points=3201,
+    name="darcy_piecewise_5pc", n_samples=5000, n_fd_points=6401,
     min_pieces=5, max_pieces=5, min_width=0.1,
     eps_range=(0.1, 10.0), feature_kind="scaled_combo_v2",
     split_strategy="no_twin_shape",
@@ -287,8 +294,8 @@ source = lambda x: np.asarray(x, float) + 1.0     # f = 1 + x
 
 # reference: fine independent FD solve on the bubble grid
 b_exact = np.stack([
-    solve_darcy_1d(profile, source=1.0,        n_points=3201)["u_norm"],
-    solve_darcy_1d(profile, source=lambda y: np.asarray(y), n_points=3201)["u_norm"],
+    solve_darcy_1d(profile, source=1.0,        n_points=6401)["u_norm"],
+    solve_darcy_1d(profile, source=lambda y: np.asarray(y), n_points=6401)["u_norm"],
 ])
 
 # KAN bubbles predicted from the profile features (n_eps-dim)
