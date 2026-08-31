@@ -71,6 +71,7 @@ N_QUAD = 80
 FORCE_RETRAIN = False
 N_APPLY_EL = 8        # P1 elements used in the f=1+x application mesh
 N_APPLY_REF = 32001   # fine reference grid for the application comparison
+N_APPLY_SAMPLES = 4   # number of test-set profiles to apply f = 1 + x to
 
 
 def sync():
@@ -443,45 +444,50 @@ def main():
     plt.close()
     print(f"Saved: {FIG_DIR / 'bubbles_train.png'}")
 
-    # ---- 8. apply to the real problem f = 1 + x ----
-    i_app = int(reps[1])  # one representative train profile
-    pool_idx = ds["metadata"]["split_indices"]["train"][i_app]
-    piece_edges = ds["metadata"]["piece_edges"][pool_idx]
-    piece_values = ds["metadata"]["piece_values"][pool_idx]
-    profile = PiecewiseDiffusion(np.asarray(piece_edges),
-                                 np.asarray(piece_values))
-    eps_ratios = ds["train"]["constant"]["eps_ratios"][i_app]
-
-    x_ref, u_ref, sols, errors = solve_f1px(model, profile, eps_ratios)
-
+    # ---- 8. apply to the real problem f = 1 + x on test-set profiles ----
+    n_test = len(ds["test"]["constant"]["b"])
+    apply_idx = np.linspace(0, n_test - 1, N_APPLY_SAMPLES).astype(int).tolist()
     print()
     print("=" * 66)
-    print(f"APPLICATION: -(eps u')' = 1 + x   (P1 mesh: {N_APPLY_EL} elements)")
+    print(f"APPLICATION: -(eps u')' = 1 + x   (P1 mesh: {N_APPLY_EL} elements, "
+          f"{len(apply_idx)} test profiles)")
     print("=" * 66)
-    print(f"  epsilon profile (pool idx {pool_idx}):")
-    print(f"    pieces: {list(zip(piece_edges, piece_values))}")
-    print(f"    contrast c = {np.max(piece_values)/np.min(piece_values):.3f}")
-    print(f"{'method':<22}{'rel L2':>12}{'rel H1':>12}")
-    print("-" * 46)
-    print(f"{'Reference':<22}{1.0:>12.4e}{1.0:>12.4e}")
-    for name, e in errors.items():
-        print(f"{name:<22}{e['rel_l2']:>12.4e}{e['rel_h1']:>12.4e}")
+    for i_test in apply_idx:
+        pool_idx = ds["metadata"]["split_indices"]["test"][i_test]
+        piece_edges = ds["metadata"]["piece_edges"][pool_idx]
+        piece_values = ds["metadata"]["piece_values"][pool_idx]
+        profile = PiecewiseDiffusion(np.asarray(piece_edges),
+                                     np.asarray(piece_values))
+        eps_ratios = ds["test"]["constant"]["eps_ratios"][i_test]
 
-    fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
-                             gridspec_kw={"height_ratios": [3, 1]})
-    ax = axes[0]
-    ax.plot(x_ref, u_ref, "k-", lw=1.8, label="Reference")
-    for name in sols:
-        ax.plot(x_ref, sols[name], label=name)
-    ax.set_ylabel("u(x)"); ax.legend(); ax.grid(True, alpha=0.3)
-    ax.set_title("Solution of -(eps u')' = 1 + x by each method")
-    ax = axes[1]
-    ax.plot(x_ref, step_eps(profile, x_ref), "C2", lw=1.6)
-    ax.set_ylabel("eps(x)"); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    plt.savefig(FIG_DIR / "solution_f1px.png", dpi=150)
-    plt.close()
-    print(f"Saved: {FIG_DIR / 'solution_f1px.png'}")
+        x_ref, u_ref, sols, errors = solve_f1px(model, profile, eps_ratios)
+
+        print()
+        print(f"  -- test sample #{i_test} (pool idx {pool_idx}) --")
+        print(f"    contrast c = {np.max(piece_values)/np.min(piece_values):.3f}")
+        print(f"{'method':<22}{'rel L2':>12}{'rel H1':>12}")
+        print("-" * 46)
+        print(f"{'Reference':<22}{1.0:>12.4e}{1.0:>12.4e}")
+        for name, e in errors.items():
+            print(f"{name:<22}{e['rel_l2']:>12.4e}{e['rel_h1']:>12.4e}")
+
+        fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
+                                 gridspec_kw={"height_ratios": [3, 1]})
+        ax = axes[0]
+        ax.plot(x_ref, u_ref, "k-", lw=1.8, label="Reference")
+        for name in sols:
+            ax.plot(x_ref, sols[name], label=name)
+        ax.set_ylabel("u(x)"); ax.legend(); ax.grid(True, alpha=0.3)
+        ax.set_title(f"Solution of -(eps u')' = 1 + x  (test #{i_test}, "
+                     f"pool {pool_idx})")
+        ax = axes[1]
+        ax.plot(x_ref, step_eps(profile, x_ref), "C2", lw=1.6)
+        ax.set_ylabel("eps(x)"); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fname = FIG_DIR / f"solution_f1px_test{i_test}.png"
+        plt.savefig(fname, dpi=150)
+        plt.close()
+        print(f"    Saved: {fname}")
 
 
 if __name__ == "__main__":

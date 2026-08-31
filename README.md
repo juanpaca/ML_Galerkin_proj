@@ -253,8 +253,8 @@ Training notes:
   autograd.
 - Observed GPU cost ~ tens of minutes per 1400-epoch mode at ~14k train samples
   (scale down `n_epochs`/pool size for a quick smoke run).
-- The checkpoint is saved to `models/` and reloaded by setting
-  `TRAIN = False` in the tutorial.
+- The checkpoint is saved to `models/`; it is loaded automatically on rerun
+  (skip training) unless `FORCE_RETRAIN = True` in the tutorial.
 
 ### Save / load
 
@@ -280,10 +280,12 @@ local ε(x)) for a few training samples.
 
 ### 4b. PDE-level application: solve `-(ε u')' = 1 + x`
 
-`tutorial_darcy_variable.py` section 8 compares **Reference** (fine FD),
-**Galerkin** (P1, no bubbles), **Gal+bubble(exact)**, and **Gal+bubble(KAN)**
-on a coarse P1 mesh (`n_el = 8`), reporting relative L2 and H1 vs the
-reference, and plots the solutions over the applied ε(x).
+`tutorial_darcy_variable.py` section 8 applies `-(εu')' = 1 + x` to
+`N_APPLY_SAMPLES` (default 4) **test-set** profiles, comparing **Reference**
+(fine FD), **Galerkin** (P1, no bubbles), **Gal+bubble(exact)**, and
+**Gal+bubble(KAN)** on a coarse P1 mesh (`n_el = 8`), reporting relative L2
+and H1 vs the reference, and plotting each solution over its applied ε(x)
+(`figures/solution_f1px_test<N>.png`).
 
 ```python
 from src.darcy_assembly import assemble_p1, assemble_enriched, eval_enriched
@@ -324,7 +326,7 @@ aligns with the P1 mesh.
 | 5 | Per-split (train/val/test) mean/worst relative-L2 table, per mode |
 | 6 | Closest H¹-cosine pair (train/val vs test): `best_simil` leakage check + bubble & ε plots |
 | 7 | Plot learned vs target bubbles on training samples (+ ε panels) |
-| 8 | Apply to `-(εu')' = 1 + x`: Reference / Galerkin / Gal+bubble(exact) / Gal+bubble(KAN), rel-L2 & rel-H1 |
+| 8 | Apply to `-(εu')' = 1 + x` on `N_APPLY_SAMPLES` test profiles: Reference / Galerkin / Gal+bubble(exact) / Gal+bubble(KAN), rel-L2 & rel-H1 |
 
 ---
 
