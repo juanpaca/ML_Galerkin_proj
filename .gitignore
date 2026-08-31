@@ -26,4 +26,7 @@ models/*.pt
 # Auxiliary project files (not needed for running)
 report_project/
 theory/
+figures/
+KANNetwork/
+rfb_ML_project.tex
 
