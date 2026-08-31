@@ -17,8 +17,7 @@ Key scripts:
 - `data_generation.py` — generate leakage-free dataset (shape-based split, no-twin guarantee), replaces `data.py`
 - `data_generation_darcy_variable.py` — generate piecewise-diffusion Darcy pool, contrast-band splits, enrichment gate
 - `check_fd_accuracy.py` — validate FD bubble solver vs analytic solution (`src/rfb_analytic.py`), audit datasets
-- `tutorial.py` — full guided walkthrough: leakage plots, bubble shapes, training, OOD test, assembly
-- `tutorial_darcy_variable.py` — generate and audit the piecewise-diffusion Darcy dataset
+- `tutorial_darcy_variable.py` — load data, train KAN, evaluate, save model (120 lines)
 - `convergence_study.py` — convergence study (Classical/Exact RFB, `--train-kan` for KAN)
 - `export_bubble_figures.py` — paper figure generation (bubbles + enriched solutions)
 - `tests/run_all.py` — one-command full test suite (runs the whole `tests/` dir): `venv/bin/python tests/run_all.py`

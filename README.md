@@ -11,7 +11,7 @@ The whole repository is organized around a standard ML loop:
 0. Test that everything works   tests/run_all.py
 1. Generate data                data_generation.py
 2. Verify the data              check_fd_accuracy.py, dataset_summary, similarity analysis
-3. Train the KAN                train_multi_bubble_on_dataset / tutorial.py
+3. Train the KAN                train_multi_bubble_on_dataset / tutorial_darcy_variable.py
 4. Evaluate the results         OOD test set, assembly, convergence_study.py
 ```
 
@@ -65,11 +65,10 @@ Run these first — a clean checkout should pass all of them.
 venv/bin/python tests/run_all.py               # full pytest suite (159 checks)
 ```
 
-Optional full walkthrough (also works in Google Colab, see
-[tutorial.py](#5-full-walkthrough)):
+Optional full walkthrough:
 
 ```bash
-venv/bin/python tutorial.py
+venv/bin/python tutorial_darcy_variable.py
 ```
 
 ---
@@ -303,7 +302,7 @@ Training notes:
 - **Value-only loss** (`grad_weight=0.0`): the gradient-matching term with
   `create_graph=True` diverges. Value-only MSE is stable.
 - Input scaling: `Pe_s = log1p(Pe)/6`, `ρ_s = log1p(ρ)/6`, `ξ_s = 2ξ − 1`.
-- The tutorial (`tutorial.py`) contains a timed benchmark (expect < 1 ms per
+- The tutorial (`tutorial_darcy_variable.py`) contains the full pipeline
   single forward on GPU) and loss-curve plots.
 
 ---
@@ -381,21 +380,14 @@ plot_convergence(results, save_path="convergence.png")
 
 ## 5. Full walkthrough
 
-`tutorial.py` runs the whole loop end-to-end (standalone or in Colab):
+`tutorial_darcy_variable.py` runs the whole loop end-to-end:
 
 | Section | Content |
 |---|---|
-| 0–1 | Colab setup + imports |
-| 2 | Load `rfb_5k_noleak`, summary |
-| 2B | **Leakage confirmation plots**: train-vs-test similarity heatmaps, twin-rate histograms for the leaking `rfb_5k_frame` vs the leak-free no-leak split |
-| 3 | Bubble shapes: rounded low-Pe train bubbles vs boundary-layer high-Pe test bubbles |
-| 4 | Split visualization + overlap check + Pe-range table |
-| 5 | Timed forward benchmark + training (700 epochs, both modes) |
-| 5D | Per-sample RMSE on the OOD test set, colored by ρ |
-| 6–9 | KAN vs exact bubble shapes and PDE solutions on 2 interpolation + 2 extrapolation samples, with assembly errors |
-
-In Colab, `git clone` + `git pull`, mount Drive and symlink
-`datasets/` automatically.
+| 1 | Load or generate the dataset (`generate_and_save_dataset` / `load_dataset`) |
+| 2 | Build the `MultiKANBubble1D` model |
+| 3 | Train both modes (constant, xi) with cosine LR, save the checkpoint to `models/` |
+| 4 | Evaluate relative L2 on train / val / test and print the table |
 
 ---
 
@@ -460,8 +452,7 @@ b_const = model.bubbles[0](xi, pe=torch.tensor(100.0), rho=torch.tensor(0.0))  #
 data_generation.py       CLI: pool generation + no-twin shape split + save
 data_generation_darcy_variable.py  CLI: Darcy pool + contrast-band splits + enrichment gate
 check_fd_accuracy.py     CLI: FD-vs-analytic sweep, resolution study, dataset audit
-tutorial.py              Full guided walkthrough (Colab-compatible)
-tutorial_darcy_variable.py  Darcy dataset generation + audit
+tutorial_darcy_variable.py  Load data, train KAN, evaluate, save model
 convergence_study.py     Convergence study CLI
 export_bubble_figures.py Paper figure generation (bubbles + enriched solutions)
 tests/run_all.py         One-command pytest suite
