@@ -42,7 +42,10 @@ FIG_DIR.mkdir(parents=True, exist_ok=True)
 # 5-piece spec: exactly 5 pieces of constant eps, thinnest piece ~ l/10,
 # eps in [0.1, 10] (contrast c = eps_max/eps_min in [1, 100]).
 N_SAMPLES = 5000
-N_FD_POINTS = 3201
+# Higher bubble resolution: the enrichment gate is disabled (see below), so the
+# budget it would have spent re-solving a fine reference per sample goes into
+# generating the reference bubbles themselves at a finer grid instead.
+N_FD_POINTS = 6401
 N_PROFILE_FEATURES = 8
 MIN_PIECES = 5
 MAX_PIECES = 5
@@ -284,6 +287,7 @@ def main():
             min_width=MIN_PIECE_WIDTH, eps_range=EPS_RANGE,
             val_frac=VAL_FRAC, test_frac=TEST_FRAC, seed=SEED,
             feature_kind=FEATURE_KIND, split_strategy=SPLIT_STRATEGY,
+            verify_enrichment=False,
         )
     else:
         ds = load_dataset(DATASET_NAME, subdir=DATASET_SUBDIR)
