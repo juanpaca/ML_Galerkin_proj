@@ -199,13 +199,13 @@ res = bubble_similarity_analysis(ds, mode="constant")   # or mode="xi"
 res["cross"]["train_vs_test"]["stats"]["frac_gt_0.99"]  # 0.0 on a clean set
 ```
 
-### 2c. Worst H¹-cosine pair
+### 2c. Closest H¹-cosine pair (leakage check)
 
-`tutorial_darcy_variable.py` computes the global worst (lowest) H¹ cosine
-across (train+val) vs test and plots the two bubbles plus both ε(x) profiles
-(`figures/worst_pair.png`). This visually confirms the OOD transfer: the worst
-pair is genuinely distinct in shape *and* profile (empirically worst_simil
-≈ −0.05 on the 5pc dataset — near-orthogonal in H¹).
+`tutorial_darcy_variable.py` computes the **closest** (maximum) H¹ cosine
+across (train+val) vs test — the most-similar train/val and test bubbles — and
+plots them plus both ε(x) profiles (`figures/closest_pair.png`). A high
+similarity here (near 1) would signal test-set leakage; a value well below the
+twin threshold confirms the test set is genuinely OOD.
 
 ---
 
@@ -319,10 +319,10 @@ aligns with the P1 mesh.
 |---|---|
 | 1 | Load (or generate) the dataset; print split sizes / FD grid / feature count |
 | 2 | Build the `MultiKANBubble1D` model |
-| 3 | Train both modes (constant, xi) with cosine LR; save to `models/` |
+| 3 | Train both modes (constant, xi) with cosine LR; save to `models/`. Skips training if a checkpoint already exists (set `FORCE_RETRAIN = True` to retrain) |
 | 4 | Plot training losses |
 | 5 | Per-split (train/val/test) mean/worst relative-L2 table, per mode |
-| 6 | Worst H¹-cosine pair (train/val vs test): `worst_simil` + bubble & ε plots |
+| 6 | Closest H¹-cosine pair (train/val vs test): `best_simil` leakage check + bubble & ε plots |
 | 7 | Plot learned vs target bubbles on training samples (+ ε panels) |
 | 8 | Apply to `-(εu')' = 1 + x`: Reference / Galerkin / Gal+bubble(exact) / Gal+bubble(KAN), rel-L2 & rel-H1 |
 

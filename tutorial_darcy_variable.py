@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Darcy variable-diffusion framework: prepare, generate, train, evaluate,
-audit the worst H1-similarity pair, then apply the learned bubbles to the
+audit the closest (most-similar train/val-test) H1 pair for leakage, then apply the learned bubbles to the
 real problem  -(eps u')' = 1 + x  and compare Reference / Galerkin /
 Gal+bubble(exact) / Gal+bubble(KAN).
 
@@ -58,14 +58,17 @@ VAL_FRAC = 0.15
 TEST_FRAC = 0.15
 SEED = 42
 
-N_EPOCHS = 1400
-BATCH_SIZE = 256
+N_EPOCHS = 700
+BATCH_SIZE = 512
 LR = 1e-3
 N_HIDDEN = 32
 N_GRID = 12
-N_QUAD = 160
+N_QUAD = 80
 
-TRAIN = True          # False -> load an existing checkpoint from MODEL_PATH
+# If True, retrain even when a checkpoint already exists. If False, a present
+# checkpoint is loaded (train/save skipped) so you can re-run just the analysis
+# and figures without re-training.
+FORCE_RETRAIN = False
 N_APPLY_EL = 8        # P1 elements used in the f=1+x application mesh
 N_APPLY_REF = 32001   # fine reference grid for the application comparison
 
@@ -148,10 +151,13 @@ def predict_bubbles_batch(model, xi_grid, eps_ratios_all, mode_index,
     return out
 
 
-def worst_h1_pair(ds, lambda_deriv=0.2):
-    """Global worst (lowest) H1 cosine pair across (train+val) vs test.
+def closest_h1_pair(ds, lambda_deriv=0.2):
+    """Closest (most similar) train/val vs test pair by H1 cosine.
 
-    Returns (worst_simil, ref_b, test_b, ref_eps_ratios, test_eps_ratios,
+    A high value here is the leakage diagnostic: if a test bubble is nearly a
+    twin of a train bubble (similarity ~ 1), the OOD test is compromised.
+
+    Returns (best_simil, ref_b, test_b, ref_eps_ratios, test_eps_ratios,
              ref_pool_idx, test_pool_idx, xi).
     """
     mode = "constant"
@@ -170,10 +176,10 @@ def worst_h1_pair(ds, lambda_deriv=0.2):
     C = (F_test @ F_ref.T) / np.outer(d_test, d_ref)
     C = np.clip(C, -1.0, 1.0)
 
-    # worst similarity = global min (furthest pair)
-    tt, rr = np.unravel_index(np.argmin(C), C.shape)
-    worst_simil = float(C[tt, rr])
-    return (worst_simil, b_ref[rr], b_test[tt], eps_ref[rr], eps_test[tt],
+    # closest pair = global max (the most-similar train/test twins)
+    tt, rr = np.unravel_index(np.argmax(C), C.shape)
+    best_simil = float(C[tt, rr])
+    return (best_simil, b_ref[rr], b_test[tt], eps_ref[rr], eps_test[tt],
             rr, tt, xi)
 
 
@@ -308,7 +314,11 @@ def main():
     print(f"KAN: {n_params} parameters ({n_params // 2} per mode)")
 
     # ---- 3. train (or load) ----
-    if TRAIN:
+    if MODEL_PATH.exists() and not FORCE_RETRAIN:
+        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+        print(f"Loaded: {MODEL_PATH}")
+        history = None
+    else:
         t0 = time.time()
         history = train_multi_bubble_on_dataset(
             model, ds["train"],
@@ -323,12 +333,9 @@ def main():
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), MODEL_PATH)
         print(f"Saved: {MODEL_PATH}")
-    else:
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-        print(f"Loaded: {MODEL_PATH}")
 
-    # ---- 4. plot losses ----
-    if TRAIN:
+    # ---- 4. plot losses (only when freshly trained) ----
+    if history is not None:
         plt.figure(figsize=(6, 4))
         for mode_name, losses in history.items():
             plt.semilogy(losses, label=mode_name)
@@ -350,8 +357,8 @@ def main():
             print(f"{split:>5} {mode:>8} {rmse.mean():12.4e} {rel_l2.mean():12.4e} "
                   f"{rel_l2.max():12.4e}")
 
-    # ---- 6. worst H1-cosine pair (train/val vs test), plot pair + eps ----
-    (worst_simil, b_ref_pair, b_test_pair, _er, _et, rr, tt, _xi) = worst_h1_pair(ds)
+    # ---- 6. closest H1-cosine pair (train/val vs test): leakage check ----
+    (best_simil, b_ref_pair, b_test_pair, _er, _et, rr, tt, _xi) = closest_h1_pair(ds)
 
     def pool_index_of_combined(r):
         n_tr = len(ds["train"]["constant"]["pe"])
@@ -363,7 +370,8 @@ def main():
                   int(ds["metadata"]["split_indices"]["test"][tt]))
     print()
     print("=" * 66)
-    print(f"WORST PAIR H1 similarity: worst_simil = {worst_simil:.6f}")
+    print(f"CLOSEST PAIR H1 similarity (max): best_simil = {best_simil:.6f}")
+    print("  -> the most-similar train/val-test bubbles; high value = leakage.")
     print("=" * 66)
     print(f"  train/val pool idx {pool_pairs[0]}  <->  test pool idx {pool_pairs[1]}")
 
@@ -384,13 +392,10 @@ def main():
         ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
     # overlay both eps on the third column for direct comparison
     ax = axes[0, 2]
-    prof_ref = PiecewiseDiffusion(
-        np.asarray(ds["metadata"]["piece_edges"][pool_pairs[0]]),
-        np.asarray(ds["metadata"]["piece_values"][pool_pairs[0]]))
     # both bubbles overlaid
     ax.plot(_xi, b_ref_pair, label="train/val")
     ax.plot(_xi, b_test_pair, label="test")
-    ax.set_title(f"Both bubbles (sim={worst_simil:.3f})")
+    ax.set_title(f"Both bubbles (sim={best_simil:.3f})")
     ax.legend(); ax.grid(True, alpha=0.3)
     ax = axes[1, 2]
     xs = np.linspace(0, 1, 2000)
@@ -400,11 +405,11 @@ def main():
                                np.asarray(ds["metadata"]["piece_values"][pool_idx]))
         ax.plot(xs, step_eps(p, xs), c, lw=1.6, label=tag)
     ax.set_title("Both eps(x)"); ax.legend(); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
-    fig.suptitle(f"Worst H1-cosine pair: worst_simil = {worst_simil:.6f}")
+    fig.suptitle(f"Closest H1-cosine pair: best_simil = {best_simil:.6f}")
     fig.tight_layout()
-    plt.savefig(FIG_DIR / "worst_pair.png", dpi=150)
+    plt.savefig(FIG_DIR / "closest_pair.png", dpi=150)
     plt.close()
-    print(f"Saved: {FIG_DIR / 'worst_pair.png'}")
+    print(f"Saved: {FIG_DIR / 'closest_pair.png'}")
 
     # ---- 7. plot learned bubbles vs real on train samples (+ eps panel) ----
     n_rep = 4
