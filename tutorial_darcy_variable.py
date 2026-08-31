@@ -29,18 +29,22 @@ from src.training import train_multi_bubble_on_dataset
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DATASET_NAME = "darcy_piecewise_combo_cband5k"
+DATASET_NAME = "darcy_piecewise_5pc_cband"
 DATASET_SUBDIR = "data_darcy_variable"
 MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
 FIG_DIR = Path("figures")
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
+# 5-piece spec: exactly 5 pieces of constant eps, thinnest piece ~ l/10,
+# eps in [0.1, 10] (contrast c = eps_max/eps_min in [1, 100]).
 N_SAMPLES = 5000
-N_FD_POINTS = 801
-N_PROFILE_FEATURES = 24
-MIN_PIECES = 2
-MAX_PIECES = 16
-FEATURE_KIND = "scaled_combo"
+N_FD_POINTS = 3201
+N_PROFILE_FEATURES = 8
+MIN_PIECES = 5
+MAX_PIECES = 5
+MIN_PIECE_WIDTH = 0.1
+EPS_RANGE = (0.1, 10.0)
+FEATURE_KIND = "scaled_combo_v2"
 EPS_TRANSFORM = "none"
 SPLIT_STRATEGY = "contrast_band"
 VAL_FRAC = 0.15
@@ -202,6 +206,7 @@ def main():
             n_samples=N_SAMPLES, n_fd_points=N_FD_POINTS,
             n_profile_features=N_PROFILE_FEATURES,
             min_pieces=MIN_PIECES, max_pieces=MAX_PIECES,
+            min_width=MIN_PIECE_WIDTH, eps_range=EPS_RANGE,
             val_frac=VAL_FRAC, test_frac=TEST_FRAC, seed=SEED,
             feature_kind=FEATURE_KIND, split_strategy=SPLIT_STRATEGY,
         )
