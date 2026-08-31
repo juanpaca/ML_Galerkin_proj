@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 """Darcy variable-diffusion framework: prepare, generate, train, evaluate,
-then apply the learned bubbles to the real problem  -(eps u')' = 1 + x
-and compare Reference / Galerkin / Gal+bubble(exact) / Gal+bubble(KAN).
+audit the worst H1-similarity pair, then apply the learned bubbles to the
+real problem  -(eps u')' = 1 + x  and compare Reference / Galerkin /
+Gal+bubble(exact) / Gal+bubble(KAN).
 
 Solves  -(epsilon(x) u'(x))' = f(x)  on (0, 1),  u(0) = u(1) = 0,
-where epsilon(x) is a random piecewise-constant profile.
+where epsilon(x) is a 5-piece constant profile (thinnest piece ~ l/10).
+
+Run with CUDA for the fastest configuration:
+    source venv/bin/activate && venv/bin/python tutorial_darcy_variable.py
 """
 
 import os
@@ -23,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_generation_darcy_variable import generate_and_save_dataset
 from src.darcy_assembly import assemble_p1, assemble_enriched, eval_enriched
 from src.darcy_variable import PiecewiseDiffusion, solve_darcy_1d
-from src.dataset_generation import load_dataset
+from src.dataset_generation import load_dataset, _bubble_h1_features
 from src.rfb_bubble import MultiKANBubble1D
 from src.training import train_multi_bubble_on_dataset
 
@@ -113,6 +117,63 @@ def predict_bubble(model, mode_index, xi_grid, eps_ratios):
         ).reshape(-1).cpu().numpy()
 
 
+def predict_bubbles_batch(model, xi_grid, eps_ratios_all, mode_index,
+                          chunk_size=256):
+    """Predict bubbles for many profiles (``eps_ratios_all``: N x n_eps).
+
+    Returns an (N, n_fd) array. Vectorized over the batch so it runs fast on
+    CUDA.
+    """
+    model.eval()
+    q = len(xi_grid)
+    n = len(eps_ratios_all)
+    xi = torch.tensor(xi_grid, dtype=torch.float32, device=DEVICE)
+    eps = torch.tensor(np.asarray(eps_ratios_all, dtype=np.float32),
+                       device=DEVICE)
+    out = np.empty((n, q), dtype=np.float32)
+    with torch.no_grad():
+        for s in range(0, n, chunk_size):
+            e = min(s + chunk_size, n)
+            m = e - s
+            xi_f = xi.unsqueeze(0).expand(m, -1).reshape(-1)
+            pe_f = torch.zeros(m * q, device=DEVICE)
+            rho_f = torch.zeros(m * q, device=DEVICE)
+            eps_f = eps[s:e].unsqueeze(1).expand(-1, q, -1).reshape(m * q, -1)
+            out[s:e] = model.bubbles[mode_index](
+                xi_f, pe_f, rho_f, eps_ratios=eps_f,
+            ).reshape(m, q).cpu().numpy()
+    return out
+
+
+def worst_h1_pair(ds, lambda_deriv=0.2):
+    """Global worst (lowest) H1 cosine pair across (train+val) vs test.
+
+    Returns (worst_simil, ref_b, test_b, ref_eps_ratios, test_eps_ratios,
+             ref_pool_idx, test_pool_idx, xi).
+    """
+    mode = "constant"
+    xi = ds["train"][mode]["xi"]
+    b_ref = np.concatenate([ds["train"][mode]["b"], ds["val"][mode]["b"]])
+    b_test = np.asarray(ds["test"][mode]["b"])
+    eps_ref = np.concatenate([ds["train"][mode]["eps_ratios"],
+                              ds["val"][mode]["eps_ratios"]])
+    eps_test = np.asarray(ds["test"][mode]["eps_ratios"])
+
+    # full cross H1 cosine matrix (rows = test, cols = train+val)
+    F_ref = _bubble_h1_features(b_ref, xi, lambda_deriv)
+    F_test = _bubble_h1_features(b_test, xi, lambda_deriv)
+    d_ref = np.sqrt(np.maximum(np.sum(F_ref * F_ref, axis=1), 1e-30))
+    d_test = np.sqrt(np.maximum(np.sum(F_test * F_test, axis=1), 1e-30))
+    C = (F_test @ F_ref.T) / np.outer(d_test, d_ref)
+    C = np.clip(C, -1.0, 1.0)
+
+    # worst similarity = global min (furthest pair)
+    tt, rr = np.unravel_index(np.argmin(C), C.shape)
+    worst_simil = float(C[tt, rr])
+    return (worst_simil, b_ref[rr], b_test[tt], eps_ref[rr], eps_test[tt],
+            rr, tt, xi)
+
+
 def rel_h1(u_h, u_ref, x, dx):
     """Relative H1 error between two fields on a shared grid."""
     du_h = np.gradient(u_h, x)
@@ -193,6 +254,20 @@ def solve_f1px(model, profile, eps_ratios):
     return x_ref, u_ref, sols_ref, errors
 
 
+def step_eps(profile, xs):
+    """Evaluate the piecewise-constant eps(x) on ``xs`` for plotting."""
+    return np.asarray([profile.evaluate(np.array([x]))[0] for x in xs])
+
+
+def plot_profile_step(ax, profile):
+    """Draw the piecewise-constant eps(x) as a step plot on [0, 1]."""
+    edges = profile.edges
+    # sample each piece interior for a flat step; use plot-line style
+    for e0, e1, v in zip(edges[:-1], edges[1:], profile.values):
+        ax.hlines(v, e0, e1, color="C2", lw=1.6)
+    ax.set_ylim(0.9 * min(profile.values), 1.1 * max(profile.values))
+
+
 # ---------------------------------------------------------------------------
 # Main workflow
 # ---------------------------------------------------------------------------
@@ -271,27 +346,95 @@ def main():
             print(f"{split:>5} {mode:>8} {rmse.mean():12.4e} {rel_l2.mean():12.4e} "
                   f"{rel_l2.max():12.4e}")
 
-    # ---- 6. plot learned bubbles vs real on train samples ----
+    # ---- 6. worst H1-cosine pair (train/val vs test), plot pair + eps ----
+    (worst_simil, b_ref_pair, b_test_pair, _er, _et, rr, tt, _xi) = worst_h1_pair(ds)
+
+    def pool_index_of_combined(r):
+        n_tr = len(ds["train"]["constant"]["pe"])
+        if r < n_tr:
+            return int(ds["metadata"]["split_indices"]["train"][r])
+        return int(ds["metadata"]["split_indices"]["val"][r - n_tr])
+
+    pool_pairs = (pool_index_of_combined(rr),
+                  int(ds["metadata"]["split_indices"]["test"][tt]))
+    print()
+    print("=" * 66)
+    print(f"WORST PAIR H1 similarity: worst_simil = {worst_simil:.6f}")
+    print("=" * 66)
+    print(f"  train/val pool idx {pool_pairs[0]}  <->  test pool idx {pool_pairs[1]}")
+
+    fig, axes = plt.subplots(2, 3, figsize=(13, 6))
+    for col, (tag, b, pool_idx) in enumerate(
+            [("train/val", b_ref_pair, pool_pairs[0]),
+             ("test", b_test_pair, pool_pairs[1])]):
+        ax = axes[0, col]
+        ax.plot(_xi, b)
+        ax.set_title(f"{tag} bubble (pool {pool_idx})")
+        ax.set_xlabel("xi"); ax.grid(True, alpha=0.3)
+        prof = PiecewiseDiffusion(
+            np.asarray(ds["metadata"]["piece_edges"][pool_idx]),
+            np.asarray(ds["metadata"]["piece_values"][pool_idx]))
+        ax = axes[1, col]
+        plot_profile_step(ax, prof)
+        ax.set_title(f"{tag} eps(x)")
+        ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
+    # overlay both eps on the third column for direct comparison
+    ax = axes[0, 2]
+    prof_ref = PiecewiseDiffusion(
+        np.asarray(ds["metadata"]["piece_edges"][pool_pairs[0]]),
+        np.asarray(ds["metadata"]["piece_values"][pool_pairs[0]]))
+    # both bubbles overlaid
+    ax.plot(_xi, b_ref_pair, label="train/val")
+    ax.plot(_xi, b_test_pair, label="test")
+    ax.set_title(f"Both bubbles (sim={worst_simil:.3f})")
+    ax.legend(); ax.grid(True, alpha=0.3)
+    ax = axes[1, 2]
+    xs = np.linspace(0, 1, 2000)
+    for tag, pool_idx, c in [("train/val", pool_pairs[0], "C0"),
+                             ("test", pool_pairs[1], "C1")]:
+        p = PiecewiseDiffusion(np.asarray(ds["metadata"]["piece_edges"][pool_idx]),
+                               np.asarray(ds["metadata"]["piece_values"][pool_idx]))
+        ax.plot(xs, step_eps(p, xs), c, lw=1.6, label=tag)
+    ax.set_title("Both eps(x)"); ax.legend(); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
+    fig.suptitle(f"Worst H1-cosine pair: worst_simil = {worst_simil:.6f}")
+    fig.tight_layout()
+    plt.savefig(FIG_DIR / "worst_pair.png", dpi=150)
+    plt.close()
+    print(f"Saved: {FIG_DIR / 'worst_pair.png'}")
+
+    # ---- 7. plot learned bubbles vs real on train samples (+ eps panel) ----
     n_rep = 4
     reps = np.linspace(0, len(ds["train"]["constant"]["b"]) - 1, n_rep).astype(int)
-    plt.figure(figsize=(12, 4))
+    preds = {mi: predict_bubbles_batch(model, xi, ds["train"]["constant"]["eps_ratios"][reps], mi)
+             for mi in (0, 1)}
+    profs_train = [PiecewiseDiffusion(
+        np.asarray(ds["metadata"]["piece_edges"][ds["metadata"]["split_indices"]["train"][i]]),
+        np.asarray(ds["metadata"]["piece_values"][ds["metadata"]["split_indices"]["train"][i]]))
+        for i in reps]
+    xs = np.linspace(0, 1, 1000)
+    n_rows = 3
+    plt.figure(figsize=(13, n_rows * n_rep))
     for mi, mode in enumerate(("constant", "xi")):
         for j, i in enumerate(reps):
-            ax = plt.subplot(2, n_rep, mi * n_rep + j + 1)
+            ax = plt.subplot(n_rows, n_rep, mi * n_rep + j + 1)
             b_target = ds["train"][mode]["b"][i]
-            b_pred = predict_bubble(model, mi, xi,
-                                    ds["train"][mode]["eps_ratios"][i])
-            ax.plot(xi, b_pred, "C3", label="KAN")
+            ax.plot(xi, preds[mi][j], "C3", label="KAN")
             ax.plot(xi, b_target, "k--", label="target FD")
-            rel = np.linalg.norm(b_pred - b_target) / np.linalg.norm(b_target)
+            rel = np.linalg.norm(preds[mi][j] - b_target) / np.linalg.norm(b_target)
             ax.set_title(f"{mode}[{i}] rel L2={rel:.2e}", fontsize=9)
-    plt.suptitle("Learned vs reference bubbles (train set)")
+            ax.grid(True, alpha=0.3)
+    for j, i in enumerate(reps):
+        ax = plt.subplot(n_rows, n_rep, 2 * n_rep + j + 1)
+        ax.plot(xs, step_eps(profs_train[j], xs), "C2", lw=1.4)
+        ax.set_title(f"eps(x) train[{i}]", fontsize=9)
+        ax.grid(True, alpha=0.3)
+    plt.suptitle("Learned vs reference bubbles (train set) + eps profiles")
     plt.tight_layout()
     plt.savefig(FIG_DIR / "bubbles_train.png", dpi=150)
     plt.close()
     print(f"Saved: {FIG_DIR / 'bubbles_train.png'}")
 
-    # ---- 7. apply to the real problem f = 1 + x ----
+    # ---- 8. apply to the real problem f = 1 + x ----
     i_app = int(reps[1])  # one representative train profile
     pool_idx = ds["metadata"]["split_indices"]["train"][i_app]
     piece_edges = ds["metadata"]["piece_edges"][pool_idx]
@@ -306,20 +449,27 @@ def main():
     print("=" * 66)
     print(f"APPLICATION: -(eps u')' = 1 + x   (P1 mesh: {N_APPLY_EL} elements)")
     print("=" * 66)
+    print(f"  epsilon profile (pool idx {pool_idx}):")
+    print(f"    pieces: {list(zip(piece_edges, piece_values))}")
+    print(f"    contrast c = {np.max(piece_values)/np.min(piece_values):.3f}")
     print(f"{'method':<22}{'rel L2':>12}{'rel H1':>12}")
     print("-" * 46)
     print(f"{'Reference':<22}{1.0:>12.4e}{1.0:>12.4e}")
     for name, e in errors.items():
         print(f"{name:<22}{e['rel_l2']:>12.4e}{e['rel_h1']:>12.4e}")
 
-    plt.figure(figsize=(9, 6))
-    plt.plot(x_ref, u_ref, "k-", lw=1.8, label="Reference")
+    fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
+                             gridspec_kw={"height_ratios": [3, 1]})
+    ax = axes[0]
+    ax.plot(x_ref, u_ref, "k-", lw=1.8, label="Reference")
     for name in sols:
-        plt.plot(x_ref, sols[name], label=name)
-    plt.xlabel("x"); plt.ylabel("u(x)")
-    plt.title("Solution of -(eps u')' = 1 + x by each method")
-    plt.legend(); plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+        ax.plot(x_ref, sols[name], label=name)
+    ax.set_ylabel("u(x)"); ax.legend(); ax.grid(True, alpha=0.3)
+    ax.set_title("Solution of -(eps u')' = 1 + x by each method")
+    ax = axes[1]
+    ax.plot(x_ref, step_eps(profile, x_ref), "C2", lw=1.6)
+    ax.set_ylabel("eps(x)"); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
+    fig.tight_layout()
     plt.savefig(FIG_DIR / "solution_f1px.png", dpi=150)
     plt.close()
     print(f"Saved: {FIG_DIR / 'solution_f1px.png'}")
