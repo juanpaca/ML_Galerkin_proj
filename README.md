@@ -8,7 +8,7 @@ are statically condensed into a P1 FEM — parameterized by the Péclet number
 The whole repository is organized around a standard ML loop:
 
 ```
-0. Test that everything works   test_all.py, test_assembly_pipeline.py
+0. Test that everything works   tests/run_all.py
 1. Generate data                data_generation.py
 2. Verify the data              check_fd_accuracy.py, dataset_summary, similarity analysis
 3. Train the KAN                train_multi_bubble_on_dataset / tutorial.py
@@ -62,8 +62,7 @@ Every script is run through the venv: `venv/bin/python <script>.py`.
 Run these first — a clean checkout should pass all of them.
 
 ```bash
-venv/bin/python test_all.py                # 128 checks: KAN, bubbles, training, similarity, FD-vs-analytic
-venv/bin/python test_assembly_pipeline.py  # end-to-end static condensation (untrained KAN vs exact RFB)
+venv/bin/python tests/run_all.py               # full pytest suite (159 checks)
 ```
 
 Optional full walkthrough (also works in Google Colab, see
@@ -459,11 +458,13 @@ b_const = model.bubbles[0](xi, pe=torch.tensor(100.0), rho=torch.tensor(0.0))  #
 
 ```
 data_generation.py       CLI: pool generation + no-twin shape split + save
+data_generation_darcy_variable.py  CLI: Darcy pool + contrast-band splits + enrichment gate
 check_fd_accuracy.py     CLI: FD-vs-analytic sweep, resolution study, dataset audit
 tutorial.py              Full guided walkthrough (Colab-compatible)
-test_all.py              Unit tests (KAN, bubbles, training, similarity, FD-vs-analytic)
-test_assembly_pipeline.py  End-to-end static condensation test
+tutorial_darcy_variable.py  Darcy dataset generation + audit
 convergence_study.py     Convergence study CLI
+export_bubble_figures.py Paper figure generation (bubbles + enriched solutions)
+tests/run_all.py         One-command pytest suite
 
 src/
 ├── kan.py                 KAN1D edge function (B-spline + SiLU)
