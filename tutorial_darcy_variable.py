@@ -37,7 +37,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DATASET_NAME = "darcy_piecewise_5pc_cband_15k"
 DATASET_SUBDIR = "data_darcy_variable"
-MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
 FIG_DIR = Path("figures")
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -60,21 +59,36 @@ VAL_FRAC = 0.15
 TEST_FRAC = 0.15
 SEED = 42
 
-N_EPOCHS = 700
-BATCH_SIZE = 128
+N_EPOCHS = 400
+BATCH_SIZE = 256
 LR = 1e-3
 # Uniform-KAN depth scheme (legacy): N_LAYERS = total KANLayer objects
 # (2 = one hidden layer of width N_HIDDEN).
-N_HIDDEN = 32
-N_LAYERS = 2
+N_HIDDEN = 1
+N_LAYERS = 4
 # Explicit per-hidden-layer widths. When non-empty this TAKES PRECEDENCE over
 # N_HIDDEN/N_LAYERS, e.g. [32, 64, 32] -> [n_in -> 32 -> 64 -> 32 -> 1].
 HIDDEN_SIZES = []
+
+
+def _net_tag():
+    """Short architecture tag for the model filename. Mirrors the builder's
+    precedence: HIDDEN_SIZES (explicit widths) wins over n_hidden/n_layers."""
+    if HIDDEN_SIZES:
+        return "h" + "_".join(str(w) for w in HIDDEN_SIZES)
+    return f"l{N_LAYERS}h{N_HIDDEN}"
+
+
+# The checkpoint name self-describes the model: DATASET_NAME already encodes
+# the pool size (e.g. ..._15k), and _net_tag() the exact depth/width used.
+MODEL_PATH = Path(f"models/{DATASET_NAME}_{_net_tag()}_kan.pt")
+
+
 N_GRID = 12
 N_QUAD = 80
 # Early stopping on validation loss: stop when val loss has not improved for
 # this many epochs; the model is reverted to the best-val epoch's weights.
-EARLY_STOP_PATIENCE = 80
+EARLY_STOP_PATIENCE = 50
 # Early stopping robustness: ignore the first ES_WARMUP epochs (init spikes)
 # and decide on an EMA-smoothed validation loss with factor ES_EMA_ALPHA so
 # single-epoch oscillation cannot trigger premature stopping.
