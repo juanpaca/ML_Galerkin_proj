@@ -1737,6 +1737,7 @@ def train_bubble_on_dataset(
     patience: int | None = None,
     min_delta: float = 0.0,
     restore_best: bool = True,
+    weight_decay: float = 0.0,
 ) -> list[float] | dict[str, list[float]]:
     """Train a bubble model from array-format dataset (batch mode).
 
@@ -1787,6 +1788,12 @@ def train_bubble_on_dataset(
     restore_best : bool
         If True (default), reload the model weights from the best
         validation epoch after early stopping (or when the loop finishes).
+    weight_decay : float
+        L2 weight-regularization strength λ. Adds ``λ·Σ_w ‖w‖²`` (over all
+        model parameters) to the training loss only — the reported training
+        loss and the validation loss remain the pure data loss, so the train/
+        val curves stay comparable (the decay is a regularizer for the
+        optimizer, not a monitored objective).
 
     Returns
     -------
@@ -1922,10 +1929,15 @@ def train_bubble_on_dataset(
                     dim=1,
                 )
                 loss = loss + energy_weight * torch.mean(energy)
+            data_loss = loss
+            if weight_decay > 0.0:
+                loss = loss + weight_decay * sum(
+                    p.pow(2).sum() for p in model.parameters()
+                )
             loss.backward()
             optimizer.step()
 
-            epoch_loss = epoch_loss + float(loss.detach()) * bs
+            epoch_loss = epoch_loss + float(data_loss.detach()) * bs
             n_processed += bs
 
         avg_loss = epoch_loss / n_processed
@@ -2005,6 +2017,7 @@ def train_multi_bubble_on_dataset(
     patience: int | None = None,
     min_delta: float = 0.0,
     restore_best: bool = True,
+    weight_decay: float = 0.0,
 ) -> dict[str, list[float]] | dict[str, dict[str, list[float]]]:
     """Train a multi-bubble model on all modes from a dataset split.
 
@@ -2025,6 +2038,10 @@ def train_multi_bubble_on_dataset(
     patience, min_delta, restore_best
         Forwarded to ``train_bubble_on_dataset`` for early stopping per mode
         (each mode early-stops independently on its own validation loss).
+    weight_decay : float
+        Forwarded to ``train_bubble_on_dataset``: L2 regularization strength
+        applied to each mode bubble's parameters (added to that mode's
+        training loss only).
 
     Returns
     -------
@@ -2060,6 +2077,7 @@ def train_multi_bubble_on_dataset(
             patience=patience,
             min_delta=min_delta,
             restore_best=restore_best,
+            weight_decay=weight_decay,
         )
         histories[mname] = history
     return histories

@@ -69,6 +69,9 @@ N_QUAD = 80
 # Early stopping on validation loss: stop when val loss has not improved for
 # this many epochs; the model is reverted to the best-val epoch's weights.
 EARLY_STOP_PATIENCE = 50
+# L2 weight regularization strength lambda (added as lambda * sum(w^2) to the
+# training loss only; the reported train/val losses stay the pure data loss).
+WEIGHT_DECAY = 1e-4
 
 # If True, retrain even when a checkpoint already exists. If False, a present
 # checkpoint is loaded (train/save skipped) so you can re-run just the analysis
@@ -394,6 +397,7 @@ def main():
             verbose=True, device=DEVICE, lr_scheduler="cosine",
             val_split=ds["val"],
             patience=EARLY_STOP_PATIENCE,
+            weight_decay=WEIGHT_DECAY,
         )
         sync()
         tr_min = min(min(v["train"]) for v in history.values())
