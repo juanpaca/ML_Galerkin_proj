@@ -58,7 +58,7 @@ VAL_FRAC = 0.15
 TEST_FRAC = 0.15
 SEED = 42
 
-N_EPOCHS = 1000
+N_EPOCHS = 700
 BATCH_SIZE = 256
 LR = 1e-3
 N_HIDDEN = 32
@@ -335,7 +335,7 @@ def main():
             model, ds["train"],
             mode_names=("constant", "xi"),
             n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, lr=LR,
-            grad_weight=0.001, n_quad=N_QUAD,
+            grad_weight=0.01, energy_weight=0.01, n_quad=N_QUAD,
             verbose=True, device=DEVICE, lr_scheduler="cosine",
             val_split=ds["val"],
         )
