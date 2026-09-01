@@ -68,10 +68,15 @@ N_GRID = 12
 N_QUAD = 80
 # Early stopping on validation loss: stop when val loss has not improved for
 # this many epochs; the model is reverted to the best-val epoch's weights.
-EARLY_STOP_PATIENCE = 50
+EARLY_STOP_PATIENCE = 80
+# Early stopping robustness: ignore the first ES_WARMUP epochs (init spikes)
+# and decide on an EMA-smoothed validation loss with factor ES_EMA_ALPHA so
+# single-epoch oscillation cannot trigger premature stopping.
+ES_WARMUP = 20
+ES_EMA_ALPHA = 0.95
 # L2 weight regularization strength lambda (added as lambda * sum(w^2) to the
 # training loss only; the reported train/val losses stay the pure data loss).
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 1e-3
 
 # If True, retrain even when a checkpoint already exists. If False, a present
 # checkpoint is loaded (train/save skipped) so you can re-run just the analysis
@@ -398,6 +403,8 @@ def main():
             val_split=ds["val"],
             patience=EARLY_STOP_PATIENCE,
             weight_decay=WEIGHT_DECAY,
+            es_warmup=ES_WARMUP,
+            es_ema_alpha=ES_EMA_ALPHA,
         )
         sync()
         tr_min = min(min(v["train"]) for v in history.values())

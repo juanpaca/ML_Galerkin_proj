@@ -1738,6 +1738,8 @@ def train_bubble_on_dataset(
     min_delta: float = 0.0,
     restore_best: bool = True,
     weight_decay: float = 0.0,
+    es_warmup: int = 20,
+    es_ema_alpha: float = 0.95,
 ) -> list[float] | dict[str, list[float]]:
     """Train a bubble model from array-format dataset (batch mode).
 
@@ -1775,16 +1777,16 @@ def train_bubble_on_dataset(
         alongside the training loss.
     patience : int or None
         Early-stopping patience in **epochs** (e.g. 50). Requires
-        ``val_split``. Training stops when the validation loss has not
-        improved by at least ``min_delta`` for ``patience`` consecutive
-        epochs; with ``restore_best`` the model is reverted to the state at
-        the best validation epoch. The returned histories are truncated to
-        the epochs actually run (best epoch = last index of the histories).
-        The gradient-generating term (``create_graph=True``) and cosine
-        scheduler keep to ``n_epochs`` regardless.
+        ``val_split``. Training stops when the early-stopping signal (an
+        EMA-smoothed validation loss, see ``es_ema_alpha``) has not improved
+        by at least ``min_delta`` for ``patience`` consecutive epochs; with
+        ``restore_best`` the model is reverted to the state at the best
+        (post-warm-up) validation epoch. The returned histories are truncated
+        to the epochs actually run (best epoch = last index of the
+        histories). The cosine scheduler keeps to ``n_epochs`` regardless.
     min_delta : float
-        Minimum improvement in validation loss required to reset the
-        patience counter.
+        Minimum improvement in the EMA-smoothed validation loss required to
+        reset the patience counter.
     restore_best : bool
         If True (default), reload the model weights from the best
         validation epoch after early stopping (or when the loop finishes).
@@ -1794,6 +1796,17 @@ def train_bubble_on_dataset(
         loss and the validation loss remain the pure data loss, so the train/
         val curves stay comparable (the decay is a regularizer for the
         optimizer, not a monitored objective).
+    es_warmup : int
+        Number of leading epochs during which the early-stopping signal is
+        *not* tracked (training is never stopped and the "best" state is not
+        anchored). Early-run validation spikes from the random init are
+        discarded this way.
+    es_ema_alpha : float
+        EM-factor (0 < alpha < 1) for smoothing the validation loss before
+        the patience decision: ``ema = alpha*ema + (1-alpha)*val`` each epoch.
+        Deciding on the EMA (instead of the raw single-epoch value) makes the
+        criterion immune to 1%-scale oscillation. The *reported* ``"val"``
+        history stays the raw per-epoch loss for plotting.
 
     Returns
     -------
@@ -1876,6 +1889,7 @@ def train_bubble_on_dataset(
         best_val = None
         best_epoch = 0
         best_state = None
+        ema_val = None
 
     n_batches = max(1, (N + batch_size - 1) // batch_size)
     for epoch in range(n_epochs):
@@ -1976,16 +1990,22 @@ def train_bubble_on_dataset(
             val_msg = f", val={avg_val:.6e}"
 
             if patience is not None:
-                if best_val is None or avg_val < best_val - min_delta:
-                    best_val, best_epoch = avg_val, epoch
-                    best_state = {k: v.detach().clone()
-                                  for k, v in model.state_dict().items()}
-                if epoch - best_epoch >= patience:
-                    if verbose:
-                        print(f"  early stop at epoch {epoch + 1}/{n_epochs} "
-                              f"(best val={best_val:.6e} @ epoch "
-                              f"{best_epoch + 1})")
-                    break
+                # EMA-smooth the validation signal,decision on the EMA so a
+                # single lucky/unlucky epoch (1%-scale oscillation) cannot
+                # move the early-stop criterion.
+                ema_val = (avg_val if ema_val is None
+                           else es_ema_alpha * ema_val + (1 - es_ema_alpha) * avg_val)
+                if epoch >= es_warmup:
+                    if best_val is None or ema_val < best_val - min_delta:
+                        best_val, best_epoch = ema_val, epoch
+                        best_state = {k: v.detach().clone()
+                                      for k, v in model.state_dict().items()}
+                    if epoch - best_epoch >= patience:
+                        if verbose:
+                            print(f"  early stop at epoch {epoch + 1}/{n_epochs} "
+                                  f"(best EMA val={best_val:.6e} @ epoch "
+                                  f"{best_epoch + 1}, warm-up {es_warmup})")
+                        break
 
         if verbose and (epoch + 1) % max(1, n_epochs // 10) == 0:
             print(f"  epoch {epoch + 1}/{n_epochs}: loss={avg_loss:.6e}{val_msg}")
@@ -2018,6 +2038,8 @@ def train_multi_bubble_on_dataset(
     min_delta: float = 0.0,
     restore_best: bool = True,
     weight_decay: float = 0.0,
+    es_warmup: int = 20,
+    es_ema_alpha: float = 0.95,
 ) -> dict[str, list[float]] | dict[str, dict[str, list[float]]]:
     """Train a multi-bubble model on all modes from a dataset split.
 
@@ -2042,6 +2064,9 @@ def train_multi_bubble_on_dataset(
         Forwarded to ``train_bubble_on_dataset``: L2 regularization strength
         applied to each mode bubble's parameters (added to that mode's
         training loss only).
+    es_warmup, es_ema_alpha
+        Forwarded to ``train_bubble_on_dataset``: early-stopping warm-up
+        (epochs) and EMA smoothing factor for the validation-loss signal.
 
     Returns
     -------
@@ -2078,6 +2103,8 @@ def train_multi_bubble_on_dataset(
             min_delta=min_delta,
             restore_best=restore_best,
             weight_decay=weight_decay,
+            es_warmup=es_warmup,
+            es_ema_alpha=es_ema_alpha,
         )
         histories[mname] = history
     return histories

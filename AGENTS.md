@@ -33,6 +33,8 @@ Optional args: `lr_scheduler="cosine"` (per-epoch cosine annealing),
 MSE: training halts after `patience` epochs without improvement by
 `min_delta` and, with `restore_best=True`, reloads the best-val weights;
 returned histories are truncated to the epochs actually run (per mode).
+The decisive signal is an EMA-smoothed val loss (`es_ema_alpha`), and the
+first `es_warmup` epochs are ignored so init spikes do not anchor the best.
 
 ## Architecture
 
