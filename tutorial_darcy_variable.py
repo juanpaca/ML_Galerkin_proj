@@ -66,6 +66,9 @@ LR = 1e-3
 N_HIDDEN = 32
 N_GRID = 12
 N_QUAD = 80
+# Early stopping on validation loss: stop when val loss has not improved for
+# this many epochs; the model is reverted to the best-val epoch's weights.
+EARLY_STOP_PATIENCE = 50
 
 # If True, retrain even when a checkpoint already exists. If False, a present
 # checkpoint is loaded (train/save skipped) so you can re-run just the analysis
@@ -387,15 +390,21 @@ def main():
             model, ds["train"],
             mode_names=("constant", "xi"),
             n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, lr=LR,
-            grad_weight=0.01, energy_weight=0.01, n_quad=N_QUAD,
+            grad_weight=0.000, energy_weight=0.000, n_quad=N_QUAD,
             verbose=True, device=DEVICE, lr_scheduler="cosine",
             val_split=ds["val"],
+            patience=EARLY_STOP_PATIENCE,
         )
         sync()
         tr_min = min(min(v["train"]) for v in history.values())
         vl_min = min(min(v["val"]) for v in history.values())
+        n_run = {m: len(hist["val"]) for m, hist in history.items()}
+        es_msg = ", ".join(f"{m}: {ne}/{N_EPOCHS} epochs"
+                           for m, ne in n_run.items())
         print(f"Training: {time.time() - t0:.1f}s, final train loss: "
               f"{tr_min:.4e}, final val loss: {vl_min:.4e}")
+        print(f"Early stopping (patience {EARLY_STOP_PATIENCE}): epochs run "
+              f"per mode -> {es_msg} (best-val weights restored per mode)")
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), MODEL_PATH)
         print(f"Saved: {MODEL_PATH}")

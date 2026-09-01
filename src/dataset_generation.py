@@ -1734,6 +1734,9 @@ def train_bubble_on_dataset(
     lr_scheduler: str | None = None,
     energy_weight: float = 0.0,
     val_split: dict[str, np.ndarray] | None = None,
+    patience: int | None = None,
+    min_delta: float = 0.0,
+    restore_best: bool = True,
 ) -> list[float] | dict[str, list[float]]:
     """Train a bubble model from array-format dataset (batch mode).
 
@@ -1769,17 +1772,39 @@ def train_bubble_on_dataset(
         Validation split (same layout as ``mode_data``). If given, the
         per-epoch validation loss is computed (no-grad) and returned
         alongside the training loss.
+    patience : int or None
+        Early-stopping patience in **epochs** (e.g. 50). Requires
+        ``val_split``. Training stops when the validation loss has not
+        improved by at least ``min_delta`` for ``patience`` consecutive
+        epochs; with ``restore_best`` the model is reverted to the state at
+        the best validation epoch. The returned histories are truncated to
+        the epochs actually run (best epoch = last index of the histories).
+        The gradient-generating term (``create_graph=True``) and cosine
+        scheduler keep to ``n_epochs`` regardless.
+    min_delta : float
+        Minimum improvement in validation loss required to reset the
+        patience counter.
+    restore_best : bool
+        If True (default), reload the model weights from the best
+        validation epoch after early stopping (or when the loop finishes).
 
     Returns
     -------
     list[float] or dict[str, list[float]] : if ``val_split`` is None returns
         the training-loss history ``list[float]``; otherwise returns
-        ``{"train": [...], "val": [...]}``.
+        ``{"train": [...], "val": [...]}``. With early stopping the lists are
+        truncated to the number of epochs actually run, so the best epoch for
+        each mode is ``len(history) - 1``.
     """
     if device is None:
         device = next(model.parameters()).device
     else:
         model.to(device)
+    if patience is not None:
+        if patience <= 0:
+            raise ValueError("patience must be > 0 (epochs)")
+        if val_split is None:
+            raise ValueError("early stopping (patience) requires val_split")
     N = len(mode_data["pe"])
     xi_base = torch.linspace(0.0, 1.0, n_quad, dtype=torch.float32)
     xi_base[0] = 1e-6
@@ -1841,6 +1866,9 @@ def train_bubble_on_dataset(
         if "eps_ratios" in val_split:
             val_eps = _to_tensor(val_split["eps_ratios"], device=device)
         val_losses = []
+        best_val = None
+        best_epoch = 0
+        best_state = None
 
     n_batches = max(1, (N + batch_size - 1) // batch_size)
     for epoch in range(n_epochs):
@@ -1935,8 +1963,25 @@ def train_bubble_on_dataset(
             val_losses.append(avg_val)
             val_msg = f", val={avg_val:.6e}"
 
+            if patience is not None:
+                if best_val is None or avg_val < best_val - min_delta:
+                    best_val, best_epoch = avg_val, epoch
+                    best_state = {k: v.detach().clone()
+                                  for k, v in model.state_dict().items()}
+                if epoch - best_epoch >= patience:
+                    if verbose:
+                        print(f"  early stop at epoch {epoch + 1}/{n_epochs} "
+                              f"(best val={best_val:.6e} @ epoch "
+                              f"{best_epoch + 1})")
+                    break
+
         if verbose and (epoch + 1) % max(1, n_epochs // 10) == 0:
             print(f"  epoch {epoch + 1}/{n_epochs}: loss={avg_loss:.6e}{val_msg}")
+
+    if patience is not None and best_state is not None and restore_best:
+        if verbose and val_losses:
+            print(f"  restoring best-val weights (epoch {best_epoch + 1})")
+        model.load_state_dict(best_state)
 
     if val_split is not None:
         return {"train": losses, "val": val_losses}
@@ -1957,6 +2002,9 @@ def train_multi_bubble_on_dataset(
     lr_scheduler: str | None = None,
     energy_weight: float = 0.0,
     val_split: dict[str, dict[str, np.ndarray]] | None = None,
+    patience: int | None = None,
+    min_delta: float = 0.0,
+    restore_best: bool = True,
 ) -> dict[str, list[float]] | dict[str, dict[str, list[float]]]:
     """Train a multi-bubble model on all modes from a dataset split.
 
@@ -1974,12 +2022,16 @@ def train_multi_bubble_on_dataset(
         E.g. ``dataset['val']``. If given, per-epoch validation loss is
         computed for each mode and returned as ``{"train": [...], "val": [...]}``
         per mode (see ``train_bubble_on_dataset``).
+    patience, min_delta, restore_best
+        Forwarded to ``train_bubble_on_dataset`` for early stopping per mode
+        (each mode early-stops independently on its own validation loss).
 
     Returns
     -------
     dict : per-mode loss history. Without ``val_split`` each value is a plain
         ``list[float]`` (train loss); with ``val_split`` each value is
-        ``{"train": [...], "val": [...]}``.
+        ``{"train": [...], "val": [...]}``. Histories are truncated to the
+        epochs actually run when early stopping triggers.
     """
     if device is None:
         device = next(model.parameters()).device
@@ -2005,6 +2057,9 @@ def train_multi_bubble_on_dataset(
             lr_scheduler=lr_scheduler,
             energy_weight=energy_weight,
             val_split=vdata,
+            patience=patience,
+            min_delta=min_delta,
+            restore_best=restore_best,
         )
         histories[mname] = history
     return histories

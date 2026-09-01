@@ -29,6 +29,10 @@ Optional args: `lr_scheduler="cosine"` (per-epoch cosine annealing),
 0.01·∫ε|d(b̂−b_target)/dx|²dx via input-space central differences of values
 (same discrete operator on both sides; no second-order autograd; requires
 `eps_profile` in mode_data; default 0 = legacy behavior identical).
+`patience` (epochs, requires `val_split`) adds early stopping on validation
+MSE: training halts after `patience` epochs without improvement by
+`min_delta` and, with `restore_best=True`, reloads the best-val weights;
+returned histories are truncated to the epochs actually run (per mode).
 
 ## Architecture
 
