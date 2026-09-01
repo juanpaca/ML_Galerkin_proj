@@ -33,7 +33,7 @@ from src.training import train_multi_bubble_on_dataset
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DATASET_NAME = "darcy_piecewise_5pc_cband"
+DATASET_NAME = "darcy_piecewise_5pc_cband_15k"
 DATASET_SUBDIR = "data_darcy_variable"
 MODEL_PATH = Path(f"models/{DATASET_NAME}_kan.pt")
 FIG_DIR = Path("figures")
@@ -41,7 +41,7 @@ FIG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 5-piece spec: exactly 5 pieces of constant eps, thinnest piece ~ l/10,
 # eps in [0.1, 10] (contrast c = eps_max/eps_min in [1, 100]).
-N_SAMPLES = 5000
+N_SAMPLES = 15000
 # Higher bubble resolution: the enrichment gate is disabled (see below), so the
 # budget it would have spent re-solving a fine reference per sample goes into
 # generating the reference bubbles themselves at a finer grid instead.
@@ -59,7 +59,7 @@ TEST_FRAC = 0.15
 SEED = 42
 
 N_EPOCHS = 700
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 LR = 1e-3
 N_HIDDEN = 32
 N_GRID = 12
@@ -203,7 +203,8 @@ def solve_f1px(model, profile, eps_ratios):
     Methods: Reference (fine FD), Galerkin (P1), Gal+bubble(exact),
     Gal+bubble(KAN). Errors (rel L2 and rel H1 vs reference) are returned.
     """
-    source = lambda x: np.asarray(x, dtype=float) + 1.0  # f = 1 + x
+    source = lambda x: np.asarray(0*x, dtype=float) + 1.0  # f = 1 + x
+    #source = lambda x:  1.0  # f = 1 + x
 
     # ---- reference (fine FD, independent grid) ----
     ref = solve_darcy_1d(profile, length=1.0, source=source,
@@ -283,7 +284,11 @@ def plot_profile_step(ax, profile):
 # ---------------------------------------------------------------------------
 def main():
     # ---- 1. prepare / generate ----
-    meta_path = Path(DATASET_SUBDIR) / f"{DATASET_NAME}_metadata.json"
+    # Resolve the on-disk location exactly as load_dataset/save_dataset do
+    # (base "datasets" + subdir), so the guard does not regenerate data that
+    # already exists.
+    data_dir = Path("datasets") / DATASET_SUBDIR
+    meta_path = data_dir / f"{DATASET_NAME}_metadata.json"
     if not meta_path.exists():
         print("Generating dataset...")
         ds = generate_and_save_dataset(
@@ -325,7 +330,7 @@ def main():
             model, ds["train"],
             mode_names=("constant", "xi"),
             n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, lr=LR,
-            grad_weight=0.0, n_quad=N_QUAD,
+            grad_weight=0.001, n_quad=N_QUAD,
             verbose=True, device=DEVICE, lr_scheduler="cosine",
         )
         sync()
