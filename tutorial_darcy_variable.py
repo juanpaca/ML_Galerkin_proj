@@ -26,7 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from data_generation_darcy_variable import generate_and_save_dataset
 from src.darcy_assembly import assemble_p1, assemble_enriched, eval_enriched
-from src.darcy_variable import PiecewiseDiffusion, solve_darcy_1d
+from src.darcy_variable import (PiecewiseDiffusion, solve_darcy_1d,
+                                random_piecewise_diffusion,
+                                make_profile_features)
 from src.dataset_generation import load_dataset, _bubble_h1_features
 from src.rfb_bubble import MultiKANBubble1D
 from src.training import train_multi_bubble_on_dataset
@@ -279,6 +281,56 @@ def plot_profile_step(ax, profile):
     ax.set_ylim(0.9 * min(profile.values), 1.1 * max(profile.values))
 
 
+def random_profile_in_contrast_band(rng, band, n_pieces=5,
+                                    eps_range=(0.1, 10.0), min_width=0.1,
+                                    max_tries=2000):
+    """Generate a random piecewise profile whose realized contrast
+    c = eps_max/eps_min lies inside ``band = [c_lo, c_hi]``.
+
+    Rejection-samples ``random_piecewise_diffusion`` (log-uniform values in
+    ``eps_range``) until the contrast falls in the band. Used to build
+    interpolation test profiles: same generation spec as the training pool,
+    but with contrast interior to the train band so the model is evaluated
+    inside (not at/outside) the range of contrasts it has seen.
+    """
+    for _ in range(max_tries):
+        p = random_piecewise_diffusion(rng, n_pieces=n_pieces,
+                                       eps_range=eps_range, min_width=min_width)
+        c = float(p.values.max() / p.values.min())
+        if band[0] <= c <= band[1]:
+            return p, c
+    raise RuntimeError(f"no profile found in contrast band {band} "
+                       f"after {max_tries} draws")
+
+
+def is_new_profile(pool_edges, pool_values, profile) -> bool:
+    """True if ``profile``'s (edges, values) tuple is not in the dataset pool."""
+    edges = np.round(np.asarray(profile.edges), 12)
+    values = np.round(np.asarray(profile.values), 12)
+    for e, v in zip(pool_edges, pool_values):
+        if (np.array_equal(np.round(np.asarray(e), 12), edges)
+                and np.array_equal(np.round(np.asarray(v), 12), values)):
+            return False
+    return True
+
+
+def max_h1_simil_to_pool(profile, ds, mode="constant", lambda_deriv=0.2):
+    """H1-cosine similarity of the profile's reference bubble to the full
+    train+val pool. Near 1 ⇒ the new profile is effectively a twin of an
+    existing shape (would defeat the "new profile" test).
+    """
+    b_train = np.concatenate([ds["train"][mode]["b"], ds["val"][mode]["b"]])
+    xi = ds["train"][mode]["xi"]
+    b_new = solve_darcy_1d(profile, length=1.0, source=1.0,
+                           n_points=len(xi))["u_norm"]
+    F_pool = _bubble_h1_features(b_train, xi, lambda_deriv)
+    d_pool = np.sqrt(np.maximum(np.sum(F_pool * F_pool, axis=1), 1e-30))
+    F_new = _bubble_h1_features(np.asarray([b_new]), xi, lambda_deriv)[0]
+    d_new = np.sqrt(max(float(np.sum(F_new * F_new)), 1e-30))
+    c = (F_new @ F_pool.T) / (d_new * d_pool)
+    return float(np.clip(c, -1.0, 1.0).max())
+
+
 # ---------------------------------------------------------------------------
 # Main workflow
 # ---------------------------------------------------------------------------
@@ -505,6 +557,63 @@ def main():
         ax.set_ylabel("eps(x)"); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
         fig.tight_layout()
         fname = FIG_DIR / f"solution_f1px_test{i_test}.png"
+        plt.savefig(fname, dpi=150)
+        plt.close()
+        print(f"    Saved: {fname}")
+
+    # ---- 9. interpolation test: new profiles inside the train contrast band ----
+    # Generate *new* eps(x) profiles that are not part of the dataset pool but
+    # whose contrast c = eps_max/eps_min lies inside the train band. The model
+    # is then evaluated on genuinely unseen profiles inside its training
+    # contrast interval (interpolation), using the same Reference / Galerkin /
+    # Gal+bubble(exact) / Gal+bubble(KAN) pipeline as the test-set application.
+    train_band = [float(x) for x in
+                  ds["metadata"]["contrast_band_edges"]["train"]]
+    pool_edges = ds["metadata"]["piece_edges"]
+    pool_values = ds["metadata"]["piece_values"]
+    interp_rng = np.random.default_rng(SEED + 1000)   # fresh stream → new shapes
+    print()
+    print("=" * 66)
+    print(f"INTERPOLATION: new profiles with contrast in the train band "
+          f"[{train_band[0]:.3f}, {train_band[1]:.3f}]  ({N_APPLY_SAMPLES} profiles)")
+    print("=" * 66)
+    for k in range(N_APPLY_SAMPLES):
+        profile, c = random_profile_in_contrast_band(
+            interp_rng, train_band, n_pieces=MIN_PIECES,
+            eps_range=EPS_RANGE, min_width=MIN_PIECE_WIDTH)
+        if not is_new_profile(pool_edges, pool_values, profile):
+            raise RuntimeError("interpolation profile collides with the dataset pool")
+        eps_ratios = make_profile_features(profile, N_PROFILE_FEATURES,
+                                           FEATURE_KIND)
+
+        x_ref, u_ref, sols, errors = solve_f1px(model, profile, eps_ratios)
+
+        simil = max_h1_simil_to_pool(profile, ds)
+        print()
+        print(f"  -- interpolation profile #{k} --  contrast c = {c:.4f} "
+              f"(train band [{train_band[0]:.3f}, {train_band[1]:.3f}])")
+        print(f"    new shape: not in pool, max H1-similarity to train/val "
+              f"pool = {simil:.4f}")
+        print(f"{'method':<22}{'rel L2':>12}{'rel H1':>12}")
+        print("-" * 46)
+        print(f"{'Reference':<22}{1.0:>12.4e}{1.0:>12.4e}")
+        for name, e in errors.items():
+            print(f"{name:<22}{e['rel_l2']:>12.4e}{e['rel_h1']:>12.4e}")
+
+        fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
+                                 gridspec_kw={"height_ratios": [3, 1]})
+        ax = axes[0]
+        ax.plot(x_ref, u_ref, "k-", lw=1.8, label="Reference")
+        for name in sols:
+            ax.plot(x_ref, sols[name], label=name)
+        ax.set_ylabel("u(x)"); ax.legend(); ax.grid(True, alpha=0.3)
+        ax.set_title(f"INTERPOLATION (c={c:.3f} in train band): "
+                     f"solution of -(eps u')' = 1 + x  (profile #{k})")
+        ax = axes[1]
+        ax.plot(x_ref, step_eps(profile, x_ref), "C2", lw=1.6)
+        ax.set_ylabel("eps(x)"); ax.set_xlabel("x"); ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fname = FIG_DIR / f"solution_f1px_interp{k}.png"
         plt.savefig(fname, dpi=150)
         plt.close()
         print(f"    Saved: {fname}")
