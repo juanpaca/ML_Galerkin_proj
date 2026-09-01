@@ -1,3 +1,5 @@
+from typing import Sequence
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -90,13 +92,26 @@ def _scale_pe_rho(pe: torch.Tensor, rho: torch.Tensor) -> tuple[torch.Tensor, to
 class KANBubble1D(nn.Module):
     """True KAN bubble: maps (pe, rho, xi) → b(xi) through KAN layers.
 
-    Architecture: [3+n_eps, n_hidden, 1] KAN → softplus → envelope → normalize.
+    Architecture: [3+n_eps, hidden..., 1] KAN → softplus → envelope → normalize.
     All inputs (pe_s, rho_s, xi_s, eps_s) are mapped to [-1, 1] for the KAN.
+
+    Depth/width are set either explicitly via ``hidden_sizes`` (one width per
+    hidden layer, in order) or uniformly via ``n_hidden`` + ``n_layers``:
+
+        hidden_sizes=[64, 128, 32]   → [n_in → 64 → 128 → 32 → 1]
+        n_hidden=32, n_layers=4      → [n_in → 32 → 32 → 32 → 1]  (same)
+
+    ``hidden_sizes`` wins when given and ``n_hidden``/``n_layers`` are ignored;
+    leaving it None recovers the legacy path bit-for-bit (so existing 2-layer
+    checkpoints keep loading).
 
     Parameters
     ----------
     n_hidden : int
-        Width of the single hidden KAN layer.
+        Width of every hidden KAN layer (used when ``hidden_sizes`` is None).
+    hidden_sizes : int | Sequence[int] | None
+        Explicit per-hidden-layer widths, or None to fall back to the uniform
+        ``n_hidden``/``n_layers`` scheme.
     n_grid : int
         Number of B-spline grid intervals per edge function.
     spline_order : int
@@ -107,16 +122,22 @@ class KANBubble1D(nn.Module):
         Small offset in softplus to avoid division by zero.
     n_eps : int
         Number of eps profile samples (0 = constant eps).
+    n_layers : int
+        Total number of KANLayer objects (network depth). 1 = single layer,
+        2 = one hidden layer (legacy), >2 = extra hidden layers of width
+        ``n_hidden``. Used only when ``hidden_sizes`` is None.
     """
 
     def __init__(
         self,
         n_hidden: int = 5,
+        hidden_sizes: int | Sequence[int] | None = None,
         n_grid: int = 8,
         spline_order: int = 3,
         delta: float = 1e-4,
         n_eps: int = 0,
         eps_transform: str = "log",
+        n_layers: int = 2,
     ):
         super().__init__()
         self.delta = delta
@@ -124,12 +145,32 @@ class KANBubble1D(nn.Module):
         if eps_transform not in ("log", "linear", "none"):
             raise ValueError(f"unknown eps_transform: {eps_transform}")
         self.eps_transform = eps_transform
+        if n_layers < 1:
+            raise ValueError(f"n_layers must be >= 1, got {n_layers}")
         n_in = 3 + n_eps
 
-        self.kan = nn.Sequential(
-            KANLayer(n_in, n_hidden, n_grid=n_grid, k=spline_order),
-            KANLayer(n_hidden, 1, n_grid=n_grid, k=spline_order),
-        )
+        # Canonical hidden-layer widths: explicit list, or uniform n_hidden.
+        if hidden_sizes is None:
+            hidden_sizes = [n_hidden] * max(n_layers - 1, 0)
+        elif isinstance(hidden_sizes, int):
+            hidden_sizes = [hidden_sizes] * max(n_layers - 1, 0)
+        else:
+            hidden_sizes = [int(w) for w in hidden_sizes]
+            if len(hidden_sizes) == 0:
+                raise ValueError("hidden_sizes must contain at least one width")
+            if any(w < 1 for w in hidden_sizes):
+                raise ValueError(f"hidden widths must be >= 1: {hidden_sizes}")
+        self.hidden_sizes = tuple(hidden_sizes)
+        self.n_layers = len(hidden_sizes) + 1
+
+        # Deep KAN: [n_in, h1, h2, ..., hk, 1].
+        layers: list[nn.Module] = []
+        prev = n_in
+        for w in hidden_sizes:
+            layers.append(KANLayer(prev, w, n_grid=n_grid, k=spline_order))
+            prev = w
+        layers.append(KANLayer(prev, 1, n_grid=n_grid, k=spline_order))
+        self.kan = nn.Sequential(*layers)
 
     def _build_input(self, xi, pe, rho, eps_ratios=None):
         xi = xi.flatten()

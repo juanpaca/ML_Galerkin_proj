@@ -61,9 +61,15 @@ TEST_FRAC = 0.15
 SEED = 42
 
 N_EPOCHS = 700
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 LR = 1e-3
+# Uniform-KAN depth scheme (legacy): N_LAYERS = total KANLayer objects
+# (2 = one hidden layer of width N_HIDDEN).
 N_HIDDEN = 32
+N_LAYERS = 2
+# Explicit per-hidden-layer widths. When non-empty this TAKES PRECEDENCE over
+# N_HIDDEN/N_LAYERS, e.g. [32, 64, 32] -> [n_in -> 32 -> 64 -> 32 -> 1].
+HIDDEN_SIZES = []
 N_GRID = 12
 N_QUAD = 80
 # Early stopping on validation loss: stop when val loss has not improved for
@@ -376,8 +382,10 @@ def main():
 
     # ---- 2. build model ----
     model = MultiKANBubble1D(
-        n_bubbles=2, n_hidden=N_HIDDEN, n_grid=N_GRID,
+        n_bubbles=2, n_grid=N_GRID,
         n_eps=n_eps, eps_transform=EPS_TRANSFORM,
+        hidden_sizes=HIDDEN_SIZES or None,
+        n_hidden=N_HIDDEN, n_layers=N_LAYERS,
     ).to(DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"KAN: {n_params} parameters ({n_params // 2} per mode)")

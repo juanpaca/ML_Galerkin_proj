@@ -181,6 +181,120 @@ def test_multi_bubble_shapes():
 
 
 # --------------------------------------------------------------------------
+# Depth / width generalization (hidden_sizes / n_layers)
+# --------------------------------------------------------------------------
+
+def _kan_arch(bubble):
+    """[(n_in, n_out)] of every KANLayer, in order."""
+    return [(m.n_in, m.n_out) for m in bubble.kan]
+
+
+def _kan_param_count(bubble):
+    """Reference count: per layer n_out*n_in*(n_basis + 2) (base + spline +
+    scaler weights)."""
+    n_basis = bubble.kan[0].n_basis
+    return sum(m.n_out * m.n_in * (n_basis + 2) for m in bubble.kan)
+
+
+def test_hidden_sizes_list_builds_per_layer_widths():
+    b = KANBubble1D(n_hidden=999, hidden_sizes=[4, 8, 3])
+    assert _kan_arch(b) == [(3, 4), (4, 8), (8, 3), (3, 1)]
+    assert b.n_layers == 4
+    assert b.hidden_sizes == (4, 8, 3)
+
+
+def test_hidden_sizes_int_with_n_layers_builds_uniform():
+    b = KANBubble1D(hidden_sizes=8, n_layers=4)
+    assert _kan_arch(b) == [(3, 8), (8, 8), (8, 8), (8, 1)]
+    assert b.n_layers == 4
+
+
+def test_hidden_sizes_single_matches_legacy_architecture():
+    a = KANBubble1D(n_hidden=6, n_grid=8)
+    b = KANBubble1D(hidden_sizes=[6], n_grid=8)
+    assert _kan_arch(a) == _kan_arch(b) == [(3, 6), (6, 1)]
+    # identical init order -> identical weights -> identical outputs
+    x = torch.linspace(0, 1, 33)
+    torch.manual_seed(7)
+    ya = KANBubble1D(n_hidden=6)(x, torch.tensor(10.0), torch.tensor(1.0))
+    torch.manual_seed(7)
+    yb = KANBubble1D(hidden_sizes=[6])(x, torch.tensor(10.0), torch.tensor(1.0))
+    assert torch.equal(ya, yb)
+
+
+def test_uniform_depth_equals_repeated_hidden_sizes():
+    a = KANBubble1D(n_hidden=7, n_layers=4)
+    b = KANBubble1D(hidden_sizes=[7, 7, 7])
+    assert _kan_arch(a) == _kan_arch(b) == [(3, 7), (7, 7), (7, 7), (7, 1)]
+    assert set(a.state_dict()) == set(b.state_dict())
+
+
+def test_hidden_sizes_takes_precedence_over_uniform():
+    b = KANBubble1D(n_hidden=4, n_layers=5, hidden_sizes=[32, 16])
+    assert _kan_arch(b) == [(3, 32), (32, 16), (16, 1)]
+    assert b.n_layers == 3
+
+
+def test_hidden_sizes_empty_raises():
+    with pytest.raises(ValueError):
+        KANBubble1D(hidden_sizes=[])
+
+
+def test_hidden_sizes_bad_width_raises():
+    for bad in ([0], [-2], [4, 0], [-1, 8]):
+        with pytest.raises(ValueError):
+            KANBubble1D(hidden_sizes=bad)
+
+
+def test_n_layers_validation():
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            KANBubble1D(n_layers=bad)
+
+
+def test_n_layers_1_single_layer():
+    b = KANBubble1D(n_hidden=6, n_layers=1)
+    assert _kan_arch(b) == [(3, 1)]
+    assert b.n_layers == 1
+    assert b.hidden_sizes == ()
+
+
+def test_hidden_sizes_parameter_count():
+    b = KANBubble1D(n_hidden=5, hidden_sizes=[4, 5], n_grid=8)
+    assert _kan_param_count(b) == 144 + 240 + 60
+    assert _kan_param_count(b) == sum(p.numel() for p in b.parameters())
+
+
+def test_deep_bubble_forward_normalization_and_grad():
+    torch.manual_seed(0)
+    b = KANBubble1D(n_eps=2, hidden_sizes=[8, 16], spline_order=3)
+    eps = torch.rand(101, 2) * 0.5 + 0.5  # positive, valid for log transform
+    out = b(XI, torch.tensor(100.0), torch.tensor(5.0), eps_ratios=eps)
+    assert out.shape == (101,)
+    assert torch.isfinite(out).all()
+    assert (out >= 0).all()
+    assert abs(float(out[0])) < 1e-3          # envelope vanishes at x=0
+    assert abs(float(out[-1])) < 1e-3         # envelope vanishes at x=1
+    assert abs(float(out[50]) - 1.0) < 1e-4   # normalized to 1 at the midpoint
+
+    xi_g = XI.clone().requires_grad_(True)
+    out_g = b(xi_g, torch.tensor(100.0), torch.tensor(5.0), eps_ratios=eps)
+    out_g.sum().backward()
+    assert torch.isfinite(xi_g.grad).all()
+    assert float(xi_g.grad.abs().sum()) > 0
+
+
+def test_multi_bubble_hidden_sizes():
+    multi = MultiKANBubble1D(n_bubbles=3, hidden_sizes=[4, 6])
+    assert len(multi.bubbles) == 3
+    assert all(_kan_arch(b) == [(3, 4), (4, 6), (6, 1)] for b in multi.bubbles)
+    out = multi(XI, torch.tensor(10.0), torch.tensor(0.0))
+    assert out.shape == (3, 101)
+    for i in range(3):
+        assert abs(float(out[i, 50]) - 1.0) < 1e-4
+
+
+# --------------------------------------------------------------------------
 # Training loss numerics (value-only; value + gradient; gradient flow)
 # --------------------------------------------------------------------------
 
