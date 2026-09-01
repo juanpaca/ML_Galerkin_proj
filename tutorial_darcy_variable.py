@@ -58,7 +58,7 @@ VAL_FRAC = 0.15
 TEST_FRAC = 0.15
 SEED = 42
 
-N_EPOCHS = 700
+N_EPOCHS = 1000
 BATCH_SIZE = 256
 LR = 1e-3
 N_HIDDEN = 32
@@ -320,10 +320,15 @@ def main():
     print(f"KAN: {n_params} parameters ({n_params // 2} per mode)")
 
     # ---- 3. train (or load) ----
+    history_path = MODEL_PATH.with_suffix(".history.json")
     if MODEL_PATH.exists() and not FORCE_RETRAIN:
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
         print(f"Loaded: {MODEL_PATH}")
         history = None
+        if history_path.exists():
+            import json as _json
+            history = _json.loads(history_path.read_text())
+            print(f"Loaded loss history: {history_path}")
     else:
         t0 = time.time()
         history = train_multi_bubble_on_dataset(
@@ -332,26 +337,36 @@ def main():
             n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, lr=LR,
             grad_weight=0.001, n_quad=N_QUAD,
             verbose=True, device=DEVICE, lr_scheduler="cosine",
+            val_split=ds["val"],
         )
         sync()
-        print(f"Training: {time.time() - t0:.1f}s, final loss: "
-              f"{min(min(v) for v in history.values()):.4e}")
+        tr_min = min(min(v["train"]) for v in history.values())
+        vl_min = min(min(v["val"]) for v in history.values())
+        print(f"Training: {time.time() - t0:.1f}s, final train loss: "
+              f"{tr_min:.4e}, final val loss: {vl_min:.4e}")
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), MODEL_PATH)
         print(f"Saved: {MODEL_PATH}")
+        import json as _json
+        history_path.write_text(_json.dumps(history))
+        print(f"Saved loss history: {history_path}")
 
-    # ---- 4. plot losses (only when freshly trained) ----
+    # ---- 4. plot losses (train + val), when history is available ----
     if history is not None:
-        plt.figure(figsize=(6, 4))
-        for mode_name, losses in history.items():
-            plt.semilogy(losses, label=mode_name)
+        plt.figure(figsize=(7, 4.5))
+        for mode_name, modes in history.items():
+            train_l = np.asarray(modes["train"]) if isinstance(modes, dict) else np.asarray(modes)
+            plt.semilogy(train_l, label=f"{mode_name} (train)")
+            if isinstance(modes, dict) and "val" in modes:
+                plt.semilogy(modes["val"], "--", label=f"{mode_name} (val)")
         plt.xlabel("epoch"); plt.ylabel("value MSE")
-        plt.title("KAN training loss"); plt.legend(); plt.grid(True, alpha=0.3)
+        plt.title("KAN training & validation loss"); plt.legend()
+        plt.grid(True, alpha=0.3, which="both")
         plt.tight_layout()
         plt.savefig(FIG_DIR / "losses.png", dpi=150)
         plt.close()
         print(f"Saved: {FIG_DIR / 'losses.png'}")
-        del losses
+        del train_l
 
     # ---- 5. per-split error table ----
     print()

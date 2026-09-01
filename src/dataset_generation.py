@@ -1733,7 +1733,8 @@ def train_bubble_on_dataset(
     device: torch.device | None = None,
     lr_scheduler: str | None = None,
     energy_weight: float = 0.0,
-) -> list[float]:
+    val_split: dict[str, np.ndarray] | None = None,
+) -> list[float] | dict[str, list[float]]:
     """Train a bubble model from array-format dataset (batch mode).
 
     Parameters
@@ -1764,10 +1765,16 @@ def train_bubble_on_dataset(
         Derivatives are input-space central differences of prediction and
         target values (no second-order autograd graph), evaluated on the
         interior quadrature nodes. Requires ``eps_profile`` in mode_data.
+    val_split : dict or None
+        Validation split (same layout as ``mode_data``). If given, the
+        per-epoch validation loss is computed (no-grad) and returned
+        alongside the training loss.
 
     Returns
     -------
-    list[float] : loss history.
+    list[float] or dict[str, list[float]] : if ``val_split`` is None returns
+        the training-loss history ``list[float]``; otherwise returns
+        ``{"train": [...], "val": [...]}``.
     """
     if device is None:
         device = next(model.parameters()).device
@@ -1818,6 +1825,22 @@ def train_bubble_on_dataset(
     elif lr_scheduler is not None:
         raise ValueError(f"unknown lr_scheduler: {lr_scheduler}")
     losses = []
+
+    # ---- optional validation split: precompute targets on the same grid ----
+    val_pe = val_rho = val_eps = val_b = None
+    if val_split is not None:
+        Nv = len(val_split["pe"])
+        val_pe = _to_tensor(val_split["pe"], device=device)          # (Nv,)
+        val_rho = _to_tensor(val_split["rho"], device=device)        # (Nv,)
+        val_b = np.zeros((Nv, n_quad), dtype=DTYPE)
+        for i in range(Nv):
+            target = {"xi": val_split["xi"], "b": val_split["b"][i],
+                      "db": val_split["db"][i]}
+            val_b[i], _ = interpolate_target(target, xi_np)
+        val_b = _to_tensor(val_b, device=device)                     # (Nv, Q)
+        if "eps_ratios" in val_split:
+            val_eps = _to_tensor(val_split["eps_ratios"], device=device)
+        val_losses = []
 
     n_batches = max(1, (N + batch_size - 1) // batch_size)
     for epoch in range(n_epochs):
@@ -1881,9 +1904,42 @@ def train_bubble_on_dataset(
         losses.append(avg_loss)
         if scheduler is not None:
             scheduler.step()
-        if verbose and (epoch + 1) % max(1, n_epochs // 10) == 0:
-            print(f"  epoch {epoch + 1}/{n_epochs}: loss={avg_loss:.6e}")
 
+        val_msg = ""
+        if val_split is not None:
+            model.eval()
+            vQ = n_quad
+            vepoch_loss = 0.0
+            vn = 0
+            with torch.no_grad():
+                for vs in range(0, len(val_pe), batch_size):
+                    vidx = torch.arange(vs, min(vs + batch_size, len(val_pe)),
+                                        device=device)
+                    vbs = len(vidx)
+                    vpe = val_pe[vidx]
+                    vrho = val_rho[vidx]
+                    vxi = xi_base.unsqueeze(0).expand(vbs, -1).reshape(-1)
+                    vpe_f = vpe.unsqueeze(1).expand(vbs, vQ).reshape(-1)
+                    vrho_f = vrho.unsqueeze(1).expand(vbs, vQ).reshape(-1)
+                    veps_f = (val_eps[vidx].unsqueeze(1).expand(vbs, vQ, -1)
+                              .reshape(vbs * vQ, -1) if val_eps is not None else None)
+                    veps_per = val_eps[vidx] if val_eps is not None else None
+                    vnf = model.norm_at_mid(vpe, vrho, eps_ratios=veps_per)
+                    vpred = model(vxi, vpe_f, vrho_f, eps_ratios=veps_f,
+                                  norm_factor=vnf).reshape(vbs, vQ)
+                    vloss = torch.mean((vpred - val_b[vidx]) ** 2)
+                    vepoch_loss = vepoch_loss + float(vloss) * vbs
+                    vn += vbs
+            model.train()
+            avg_val = vepoch_loss / vn
+            val_losses.append(avg_val)
+            val_msg = f", val={avg_val:.6e}"
+
+        if verbose and (epoch + 1) % max(1, n_epochs // 10) == 0:
+            print(f"  epoch {epoch + 1}/{n_epochs}: loss={avg_loss:.6e}{val_msg}")
+
+    if val_split is not None:
+        return {"train": losses, "val": val_losses}
     return losses
 
 
@@ -1900,7 +1956,8 @@ def train_multi_bubble_on_dataset(
     device: torch.device | None = None,
     lr_scheduler: str | None = None,
     energy_weight: float = 0.0,
-) -> dict[str, list[float]]:
+    val_split: dict[str, dict[str, np.ndarray]] | None = None,
+) -> dict[str, list[float]] | dict[str, dict[str, list[float]]]:
     """Train a multi-bubble model on all modes from a dataset split.
 
     Trains each bubble independently (one mode per bubble).
@@ -1913,10 +1970,16 @@ def train_multi_bubble_on_dataset(
         E.g. ``dataset['train']`` with keys ``"constant"``, ``"xi"``.
     mode_names : tuple[str, ...]
         Mode names in the dataset, matching the model's bubble order.
+    val_split : dict or None
+        E.g. ``dataset['val']``. If given, per-epoch validation loss is
+        computed for each mode and returned as ``{"train": [...], "val": [...]}``
+        per mode (see ``train_bubble_on_dataset``).
 
     Returns
     -------
-    dict[str, list[float]] : loss history per mode.
+    dict : per-mode loss history. Without ``val_split`` each value is a plain
+        ``list[float]`` (train loss); with ``val_split`` each value is
+        ``{"train": [...], "val": [...]}``.
     """
     if device is None:
         device = next(model.parameters()).device
@@ -1926,6 +1989,9 @@ def train_multi_bubble_on_dataset(
     for i, mname in enumerate(mode_names):
         if verbose:
             print(f"Training mode '{mname}' ({i + 1}/{len(mode_names)})")
+        vdata = None
+        if val_split is not None and mname in val_split:
+            vdata = val_split[mname]
         history = train_bubble_on_dataset(
             model.bubbles[i],
             dataset_split[mname],
@@ -1938,6 +2004,7 @@ def train_multi_bubble_on_dataset(
             device=device,
             lr_scheduler=lr_scheduler,
             energy_weight=energy_weight,
+            val_split=vdata,
         )
         histories[mname] = history
     return histories
