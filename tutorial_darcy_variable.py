@@ -68,7 +68,7 @@ N_HIDDEN = 1
 N_LAYERS = 4
 # Explicit per-hidden-layer widths. When non-empty this TAKES PRECEDENCE over
 # N_HIDDEN/N_LAYERS, e.g. [32, 64, 32] -> [n_in -> 32 -> 64 -> 32 -> 1].
-HIDDEN_SIZES = []
+HIDDEN_SIZES = [32,64,128,64,32]  
 
 
 def _net_tag():
@@ -92,7 +92,7 @@ EARLY_STOP_PATIENCE = 50
 # Early stopping robustness: ignore the first ES_WARMUP epochs (init spikes)
 # and decide on an EMA-smoothed validation loss with factor ES_EMA_ALPHA so
 # single-epoch oscillation cannot trigger premature stopping.
-ES_WARMUP = 20
+ES_WARMUP = 10
 ES_EMA_ALPHA = 0.95
 # L2 weight regularization strength lambda (added as lambda * sum(w^2) to the
 # training loss only; the reported train/val losses stay the pure data loss).
@@ -115,8 +115,52 @@ def sync():
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
-def evaluate_split(model, data, mode_index, chunk_size=64):
-    """Predict bubbles and compute per-sample relative L2."""
+# Some driver/NVML setups die on the caching allocator's NVML query ("Can't
+# initialize NVML" + INTERNAL ASSERT in CUDACachingAllocator.cpp). That assert
+# masks the real error (a cudaMalloc OOM), whose report wants NVML data. We
+# keep per-chunk allocations small (so the OOM is unlikely on a shared node),
+# retry once after emptying the cache, and only then fall back to CPU so the
+# analysis survives (the checkpoint itself is unaffected).
+_USE_GPU_EVAL = True
+
+
+def _bubble_call(bubble, xi, pe, rho, eps_ratios=None):
+    """Evaluate one bubble, retrying once after cache-clear and falling
+    back to CPU only if the CUDA forward keeps dying on the NVML/OOM path."""
+    global _USE_GPU_EVAL
+    if _USE_GPU_EVAL:
+        try:
+            return bubble(xi, pe, rho, eps_ratios=eps_ratios)
+        except RuntimeError as e:
+            if "NVML" not in str(e):
+                raise
+            torch.cuda.empty_cache()   # transient OOM: free cached blocks
+            try:
+                return bubble(xi, pe, rho, eps_ratios=eps_ratios)
+            except RuntimeError as e2:
+                if "NVML" not in str(e2):
+                    raise
+            print("\n  [warn] CUDA allocator/NVML assertion during forward "
+                  "(masked cudaMalloc OOM; the node reports NVML "
+                  "Driver/library mismatch). Continuing the analysis on CPU "
+                  "~0.4 s/profile - free GPU memory elsewhere and RE-RUN to "
+                  "keep it fast.")
+            _USE_GPU_EVAL = False
+    if next(bubble.parameters()).is_cuda:
+        bubble = bubble.to("cpu")
+    eps_cpu = None if eps_ratios is None else torch.as_tensor(
+        eps_ratios, dtype=torch.float32, device="cpu")
+    return bubble(xi.cpu(), torch.as_tensor(pe, device="cpu"),
+                  torch.as_tensor(rho, device="cpu"), eps_ratios=eps_cpu)
+
+
+def evaluate_split(model, data, mode_index, chunk_size=16):
+    """Predict bubbles and compute per-sample relative L2.
+
+    chunk_size: profiles per forward. Kept small (<=16) on purpose: large
+    batches make the first chunk reserve big CUDA segments, which can OOM on
+    a crowded node and surface as the NVML allocator assert above.
+    """
     model.eval()
     n, q = len(data["b"]), len(data["xi"])
     xi_t = torch.tensor(data["xi"], dtype=torch.float32, device=DEVICE)
@@ -130,8 +174,8 @@ def evaluate_split(model, data, mode_index, chunk_size=64):
             pe_f = torch.zeros(m * q, device=DEVICE)
             rho_f = torch.zeros(m * q, device=DEVICE)
             eps_f = eps[s:e].unsqueeze(1).expand(-1, q, -1).reshape(m * q, -1)
-            pred[s:e] = model.bubbles[mode_index](
-                xi_f, pe_f, rho_f, eps_ratios=eps_f,
+            pred[s:e] = _bubble_call(
+                model.bubbles[mode_index], xi_f, pe_f, rho_f, eps_f,
             ).reshape(m, q).cpu().numpy()
     target = data["b"]
     err = pred - target
@@ -152,13 +196,13 @@ def predict_bubble(model, mode_index, xi_grid, eps_ratios):
     rho_f = torch.zeros(m, device=DEVICE)
     eps_f = eps.unsqueeze(0).expand(m, -1)
     with torch.no_grad():
-        return model.bubbles[mode_index](
-            xi_f, pe_f, rho_f, eps_ratios=eps_f,
+        return _bubble_call(
+            model.bubbles[mode_index], xi_f, pe_f, rho_f, eps_f,
         ).reshape(-1).cpu().numpy()
 
 
 def predict_bubbles_batch(model, xi_grid, eps_ratios_all, mode_index,
-                          chunk_size=256):
+                          chunk_size=16):
     """Predict bubbles for many profiles (``eps_ratios_all``: N x n_eps).
 
     Returns an (N, n_fd) array. Vectorized over the batch so it runs fast on
@@ -179,8 +223,8 @@ def predict_bubbles_batch(model, xi_grid, eps_ratios_all, mode_index,
             pe_f = torch.zeros(m * q, device=DEVICE)
             rho_f = torch.zeros(m * q, device=DEVICE)
             eps_f = eps[s:e].unsqueeze(1).expand(-1, q, -1).reshape(m * q, -1)
-            out[s:e] = model.bubbles[mode_index](
-                xi_f, pe_f, rho_f, eps_ratios=eps_f,
+            out[s:e] = _bubble_call(
+                model.bubbles[mode_index], xi_f, pe_f, rho_f, eps_f,
             ).reshape(m, q).cpu().numpy()
     return out
 
@@ -408,6 +452,8 @@ def main():
     history_path = MODEL_PATH.with_suffix(".history.json")
     if MODEL_PATH.exists() and not FORCE_RETRAIN:
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         print(f"Loaded: {MODEL_PATH}")
         history = None
         if history_path.exists():
@@ -429,6 +475,9 @@ def main():
             es_ema_alpha=ES_EMA_ALPHA,
         )
         sync()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()   # drop the training cache before the big
+                                       # evaluation allocations (NVML flake)
         tr_min = min(min(v["train"]) for v in history.values())
         vl_min = min(min(v["val"]) for v in history.values())
         n_run = {m: len(hist["val"]) for m, hist in history.items()}

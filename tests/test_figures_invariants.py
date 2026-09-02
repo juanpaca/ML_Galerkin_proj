@@ -10,7 +10,10 @@ import os
 
 import numpy as np
 import pytest
+import torch
+import torch.nn as nn
 
+import tutorial_darcy_variable as tutorial
 from src.darcy_assembly import (
     assemble_enriched,
     assemble_p1,
@@ -116,3 +119,78 @@ def test_enriched_beats_galerkin_and_matches_expected_quality():
     # Enrichment genuinely recovers the boundary-layer solution.
     assert l2_gal > 5.0 * l2_en
     assert coeffs.shape == (2,)
+
+
+# --------------------------------------------------------------------------
+# CUDA/NVML flake: bubble forward fallback to CPU
+# --------------------------------------------------------------------------
+
+class _FakeParam:
+    """Mimics a CUDA parameter for the device checks in _bubble_call."""
+    is_cuda = True
+    dtype = torch.float32
+    device = torch.device("cpu")
+
+
+class _FlakyBubble(nn.Module):
+    """Raises the allocator's NVML assert until moved to CPU, then succeeds."""
+
+    def __init__(self):
+        super().__init__()
+        self._moved = False
+
+    def parameters(self, recurse=True):
+        return iter([_FakeParam()])
+
+    def to(self, device):
+        self._moved = True
+        return self
+
+    def forward(self, xi, pe, rho, eps_ratios=None):
+        if not self._moved:
+            raise RuntimeError(
+                "NVML_SUCCESS == DriverAPI::get()->nvmlInit_v2_() "
+                "INTERNAL ASSERT FAILED at CUDACachingAllocator.cpp:963")
+        return xi
+
+
+class _BadBubble(nn.Module):
+    def forward(self, *args, **kwargs):
+        raise RuntimeError("unrelated failure")
+
+
+@pytest.fixture()
+def restore_gpu_eval_flag():
+    yield
+    tutorial._USE_GPU_EVAL = True
+
+
+def test_bubble_call_nvml_falls_back_to_cpu(restore_gpu_eval_flag):
+    tutorial._USE_GPU_EVAL = True
+    out = tutorial._bubble_call(
+        _FlakyBubble(), torch.arange(5.0), torch.zeros(1), torch.zeros(1))
+    assert out.numel() == 5
+    assert tutorial._USE_GPU_EVAL is False
+
+
+def test_bubble_call_unrelated_error_not_swallowed(restore_gpu_eval_flag):
+    tutorial._USE_GPU_EVAL = True
+    with pytest.raises(RuntimeError, match="unrelated failure"):
+        tutorial._bubble_call(
+            _BadBubble(), torch.zeros(2), torch.zeros(1), torch.zeros(1))
+
+
+def test_evaluate_split_deep_model_normal_path(restore_gpu_eval_flag):
+    from src.rfb_bubble import MultiKANBubble1D
+    tutorial._USE_GPU_EVAL = True
+    model = MultiKANBubble1D(
+        n_bubbles=2, hidden_sizes=[32, 64, 128, 64, 32],
+        n_eps=16, eps_transform="none")
+    fake = {
+        "xi": np.linspace(0, 1, 129),
+        "eps_ratios": np.random.RandomState(0).rand(6, 16).astype(np.float32),
+        "b": np.random.RandomState(1).rand(6, 129).astype(np.float32),
+    }
+    rmse, rel = tutorial.evaluate_split(model, fake, 0, chunk_size=2)
+    assert rmse.shape == (6,) and rel.shape == (6,)
+    assert np.isfinite(rel).all()
